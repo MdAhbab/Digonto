@@ -43,7 +43,13 @@
   title        = {Schengen visa trends from {Bangladesh} (2014--2024): a statistical overview of visa applications},
   year         = {2025},
   howpublished = {Statistical overview compiled from European Commission visa statistics},
-  note         = {39,345 applications and 20,957 refusals in 2024, a refusal rate of 54.90 percent},
+  note         = {Used only for the raw counts it compiles: 39,345 applications and
+                  20,957 refusals from Bangladesh in 2024. The refusal rates quoted in
+                  this paper are taken from the European Commission directly
+                  (see ec2025visastats), because a commercial aggregator is not an
+                  appropriate primary source for a headline statistic, and because the
+                  Commission computes the rate over decisions rather than over total
+                  applications},
   url          = {https://schengenvisainfo.com/statistics/bangladesh/}
 }
 
@@ -78,7 +84,7 @@
 % ------------------------------------------------------------------ model ---
 
 @misc{gemma4,
-  author       = {{Gemma Team, Google DeepMind}},
+  author       = {{Gemma Team}},
   title        = {Gemma 4 Technical Report},
   year         = {2026},
   eprint       = {2607.02770},
@@ -281,12 +287,13 @@
 }
 
 @misc{forever2026,
-  author       = {{FOREVER Authors}},
+  author       = {Feng, Yujie and Wang, Hao and Li, Jian and Chu, Xu and Kang, Zhaolu
+                  and Liu, Yiran and Wang, Yasha and Yu, Philip S. and Wu, Xiao-Ming},
   title        = {{FOREVER}: Forgetting Curve-Inspired Memory Replay for Language Model Continual Learning},
   year         = {2026},
   eprint       = {2601.03938},
   archivePrefix= {arXiv},
-  primaryClass = {cs.CL},
+  primaryClass = {cs.LG},
   note         = {Proc. 64th Annual Meeting of the Association for Computational Linguistics (ACL), 2026},
   url          = {https://arxiv.org/abs/2601.03938}
 }
@@ -398,4 +405,15 @@
   year    = {2024},
   doi     = {10.1038/s41586-024-07335-x},
   url     = {https://doi.org/10.1038/s41586-024-07335-x}
+}
+
+@misc{ec2025visastats,
+  author       = {{European Commission, Directorate-General for Migration and Home Affairs}},
+  title        = {Visa applications reach 11.7 million in {EU} and {Schengen} associated countries},
+  year         = {2025},
+  howpublished = {European Commission news release, 20 May 2025},
+  note         = {Primary source for the per-country refusal rates used in this paper.
+                  States a Bangladesh refusal rate of 54.9 percent in 2024 against
+                  43.3 percent in 2023. Verified by direct fetch on 26 July 2026},
+  url          = {https://home-affairs.ec.europa.eu/news/visa-applications-reach-117-million-eu-and-schengen-associated-countries-2025-05-20_en}
 }
