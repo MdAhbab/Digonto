@@ -85,3 +85,21 @@ class DeleteReceipt(BaseModel):
 
     status: str
     requested_at: str
+
+
+class WithdrawReceipt(BaseModel):
+    """What POST /me/consents/withdraw tells the student it actually did.
+
+    The counts are returned rather than a bare acknowledgement so the
+    student can see the scale of what was removed. `adapters_flagged` is the
+    number of trained adapters that had already consumed at least one of the
+    deleted samples and now await a reviewer decision.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: str
+    withdrawn_at: str
+    samples_deleted: int
+    adapters_flagged: int
+    adapter_tags: list[str] = []

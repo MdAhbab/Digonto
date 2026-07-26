@@ -29,7 +29,13 @@ from app.db.connection import Databases
 from app.deps import RateLimit, get_bus, get_current_user, get_dbs
 from app.errors import NotFound
 from app.events.bus import EventBus
-from app.models.auth import ConsentsUpdate, DeleteAccountRequest, DeleteReceipt, ExportReceipt
+from app.models.auth import (
+    ConsentsUpdate,
+    DeleteAccountRequest,
+    DeleteReceipt,
+    ExportReceipt,
+    WithdrawReceipt,
+)
 from app.models.common import Page
 from app.models.destination import DestinationOut
 from app.models.profile import ProfileOut, ProfilePatch, TargetCreate, TargetOut

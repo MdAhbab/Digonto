@@ -213,6 +213,93 @@ class AuthService:
         assert row is not None
         return await self._to_user_model(row)
 
+    async def withdraw_learning_consent(self, user_id: int, *, app_db, learn_db) -> dict:
+        """Turn off `improve_model` and actually remove what it collected.
+
+        Three steps, in this order. First flip the consent, so nothing new is
+        captured while the rest runs. Second, find which adapters already
+        consumed this student's samples, because that has to be read before
+        the rows are deleted. Third, delete the samples and mark those
+        adapters for a reviewer.
+
+        The adapter is flagged rather than rolled back automatically. A
+        rollback removes the accumulated learning of every other consenting
+        student too, so the trade is a person's to make; the moderator
+        console surfaces the flag at `GET /mod/adapters`.
+        """
+        now = utc_now_iso()
+        await self._users.set_consent(user_id, "improve_model", False)
+
+        # replay_samples references answers only softly, by public_id across
+        # database files, so the ids have to be gathered from app.db first.
+        answer_public_ids = [
+            r["public_id"]
+            for r in await app_db.fetch_all(
+                """SELECT a.public_id FROM answers a
+                   JOIN questions q ON q.id = a.question_id
+                   WHERE q.user_id = ?""",
+                (user_id,),
+            )
+        ]
+        if not answer_public_ids:
+            return {
+                "status": "withdrawn",
+                "withdrawn_at": now,
+                "samples_deleted": 0,
+                "adapters_flagged": 0,
+                "adapter_tags": [],
+            }
+
+        placeholders = ", ".join("?" for _ in answer_public_ids)
+        params = tuple(answer_public_ids)
+
+        sample_rows = await learn_db.fetch_all(
+            f"""SELECT id, exported_in FROM replay_samples
+                WHERE source_answer_public_id IN ({placeholders})""",
+            params,
+        )
+        # exported_in holds the tag of the adapter a sample was trained into,
+        # and is NULL for samples that were collected but never used.
+        tags = sorted({r["exported_in"] for r in sample_rows if r["exported_in"]})
+
+        await learn_db.execute(
+            f"DELETE FROM replay_samples WHERE source_answer_public_id IN ({placeholders})",
+            params,
+        )
+
+        for tag in tags:
+            await learn_db.execute(
+                """UPDATE adapters
+                   SET notes = COALESCE(notes || ' | ', '') || ?
+                   WHERE tag = ?""",
+                (
+                    f"consent withdrawn {now}: trained on samples since deleted, "
+                    f"needs review for retrain or rollback",
+                    tag,
+                ),
+            )
+
+        await self._bus.publish(
+            EventType.PROFILE_UPDATED,
+            user_id=user_id,
+            subject_type="user",
+            subject_id=str(user_id),
+            payload={
+                "action": "learning_consent_withdrawn",
+                "withdrawn_at": now,
+                "samples_deleted": len(sample_rows),
+                "adapters_flagged": tags,
+            },
+        )
+
+        return {
+            "status": "withdrawn",
+            "withdrawn_at": now,
+            "samples_deleted": len(sample_rows),
+            "adapters_flagged": len(tags),
+            "adapter_tags": tags,
+        }
+
     async def request_export(self, user_id: int) -> dict:
         now = utc_now_iso()
         await self._bus.publish(

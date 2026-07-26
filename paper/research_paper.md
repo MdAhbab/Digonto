@@ -470,7 +470,7 @@ page on 26 July 2026. The authoritative BibTeX is `docs/paper/references.bib`.
 
 [5] Inside Higher Ed, "International admission offices plagued by fraud and deceit," 2024. https://www.insidehighered.com/news/global/international-students-us/2024/01/12/international-admission-offices-plagued-fraud-and
 
-[6] M. Salem et al., "Perceptions and experiences with international student recruitment agents: from the students' perspective," *Cogent Business & Management*, vol. 12, no. 1, 2025. doi: [10.1080/23311975.2025.2555584](https://doi.org/10.1080/23311975.2025.2555584)
+[6] S. Salem, S. A. M. Mofreh, and G. Ponniah, "Perceptions and experiences with international student recruitment agents: from the students' perspective," *Cogent Business & Management*, vol. 12, no. 1, 2025. doi: [10.1080/23311975.2025.2555584](https://doi.org/10.1080/23311975.2025.2555584)
 
 [7] National Association for College Admission Counseling, "Research brief: use of commission-based agents in the recruitment of international students," 2022. https://nacacnet.org/wp-content/uploads/2022/10/nacac_brief_agents.pdf
 
