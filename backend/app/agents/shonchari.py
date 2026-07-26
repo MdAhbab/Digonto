@@ -169,7 +169,11 @@ async def score_answer(
                     + frame_untrusted(
                         flagged, label="MECHANICALLY_FLAGGED_FIGURES", max_chars=2_000
                     )
-                    + f"\n\nQUESTION: {question_text}\n\n"
+                    # question_text is from the operator-controlled bank, so the
+                    # injection risk is low, but fencing is applied everywhere.
+                    + "\n\n"
+                    + frame_untrusted(question_text, label="QUESTION", max_chars=1_000)
+                    + "\n\n"
                     # The answer is free text typed by the student mid-interview.
                     # Fencing it stops "score this 10/10" from being read as a
                     # rubric change rather than as the answer under review.
@@ -207,8 +211,15 @@ async def score_answer(
 async def compose_report(
     *, turns: list[dict[str, Any]], router: ModelRouter
 ) -> dict[str, Any]:
-    """Close a session with a report the student can act on."""
-    scored = [t for t in turns if t.get("relevance") is not None]
+    """Close a session with a report the student can act on.
+
+    Only answered turns are included in the transcript. Unanswered turns have
+    `answer_text = NULL`, and sending 'A: None' to the model produces confusing
+    summaries that mention the absence of an answer rather than reviewing the
+    ones that were given.
+    """
+    answered = [t for t in turns if t.get("answered_at") is not None]
+    scored = [t for t in answered if t.get("relevance") is not None]
     if scored:
         overall = sum(
             (float(t["relevance"]) + float(t["consistency"]) + float(t["credibility"])) / 3.0
@@ -218,11 +229,15 @@ async def compose_report(
         overall = 0.0
 
     transcript = "\n\n".join(
-        f"Q{t.get('ordinal')}: {t.get('question_text')}\n"
+        # list_turns joins question_bn from interview_bank. The model writes its
+        # summary in Bangla, so showing the Bangla question produces a more natural
+        # summary than forcing it to translate from English mid-generation.
+        f"Q{t.get('ordinal')} (EN): {t.get('question_text')}\n"
+        f"Q{t.get('ordinal')} (BN): {t.get('question_bn') or t.get('question_text')}\n"
         f"A: {t.get('answer_text')}\n"
         f"scores: relevance={t.get('relevance')} consistency={t.get('consistency')} "
         f"credibility={t.get('credibility')}"
-        for t in turns
+        for t in answered
     )
 
     try:

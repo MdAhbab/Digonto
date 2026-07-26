@@ -204,8 +204,19 @@ class InterviewRepo:
         return dict(row) if row else None
 
     async def list_turns(self, session_id: int) -> list[dict[str, Any]]:
+        """All turns for a session, with bilingual question text joined from the bank.
+
+        `interview_turns` stores only the English question_text. The Bangla and probes
+        live in `interview_bank`, which is joined here so every consumer (the report,
+        the moderator view, the score breakdown) gets both languages without each
+        one doing its own join.
+        """
         rows = await self._db.fetch_all(
-            "SELECT * FROM interview_turns WHERE session_id = ? ORDER BY ordinal",
+            """SELECT t.*, b.text_bn AS question_bn, b.probes AS bank_probes
+                 FROM interview_turns t
+                 LEFT JOIN interview_bank b ON b.id = t.bank_id
+                WHERE t.session_id = ?
+                ORDER BY t.ordinal""",
             (session_id,),
         )
         return [dict(r) for r in rows]

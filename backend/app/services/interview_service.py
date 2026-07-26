@@ -293,7 +293,9 @@ class InterviewService:
                 {
                     "ordinal": t["ordinal"],
                     "question_en": t["question_text"],
-                    "question_bn": t["question_text"],
+                    # list_turns now joins interview_bank.text_bn; fall back to the
+                    # English text only when the bank row was deleted since this turn.
+                    "question_bn": t.get("question_bn") or t["question_text"],
                     "relevance": t["relevance"],
                     "consistency": t["consistency"],
                     "credibility": t["credibility"],
@@ -302,6 +304,7 @@ class InterviewService:
                     "contradicts": _safe_json_loads(t.get("contradicts"), []),
                 }
                 for t in turns
+                if t.get("answered_at") is not None
             ],
             "created_at": report["created_at"],
         }
