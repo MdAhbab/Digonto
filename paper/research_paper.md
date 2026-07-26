@@ -379,9 +379,14 @@ on it.
 
 ## Data and Code Availability
 
-The source code, the benchmark, and the evaluation logs behind every reported
-number will be released in the project repository under an open licence. Gemma 4
-is used under the Apache 2.0 licence.
+The complete source code is public at https://github.com/MdAhbab/Digonto under
+the Apache 2.0 licence. The repository contains the backend, the web client, the
+database schema, the seven agent implementations, and the deployment scripts.
+The 200-question Bangla benchmark and the evaluation logs behind every number
+reported in this paper will be added to the same repository as they are
+produced, so that any figure we state as measured can be re-derived from the
+published logs. A running deployment is available at https://digonto.ahbab.dev.
+Gemma 4 is used under the Apache 2.0 licence.
 
 ---
 
