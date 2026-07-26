@@ -36,7 +36,7 @@ from app.db.migrate import run_migrations
 from app.events.bus import EventBus
 from app.llm.router import ModelRouter
 from app.repositories.portal_repo import PortalRepo
-from app.workers import crawler, differ, discovery, embedder, learner, retention
+from app.workers import crawler, differ, discovery, embedder, insights, learner, retention
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -53,6 +53,10 @@ _CRAWL_JOB_PREFIX = "crawl:"
 _LEARNING_CYCLE_INTERVAL_DAYS = 21
 _TRAINING_JOB_POLL_MINUTES = 30
 _NIGHTLY_RETENTION_CRON = "17 3 * * *"  # 03:17 UTC: off-peak, off the hour
+
+# 00:40 UTC, so the day it reports on has actually ended, and 23 minutes before the
+# retention sweep so a purge counted tonight is one the report has already seen.
+_NIGHTLY_INSIGHTS_CRON = "40 0 * * *"
 
 # Random offset applied to every portal's scheduled crawl. Thirty minutes across 31
 # portals leaves the effective rate under two starts a minute even in the worst
@@ -114,6 +118,12 @@ class WorkerApp:
             self._run_retention,
             CronTrigger.from_crontab(_NIGHTLY_RETENTION_CRON),
             id="nightly-retention",
+            replace_existing=True,
+        )
+        self.scheduler.add_job(
+            self._run_insights,
+            CronTrigger.from_crontab(_NIGHTLY_INSIGHTS_CRON),
+            id="nightly-insights",
             replace_existing=True,
         )
         self.scheduler.add_job(
@@ -180,7 +190,11 @@ class WorkerApp:
                 self.scheduler.remove_job(job.id)
 
     async def _run_retention(self) -> None:
-        await retention.run_nightly(self.dbs, self.settings)
+        # The bus is required for the account-purge sweep, which publishes user.deleted.
+        await retention.run_nightly(self.dbs, self.settings, bus=self.bus)
+
+    async def _run_insights(self) -> None:
+        await insights.run_nightly(self.dbs, self.settings)
 
     async def _run_learning_cycle(self) -> None:
         await learner.run_learning_cycle(self.dbs, self.settings)

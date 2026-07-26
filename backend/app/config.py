@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     db_dir: Path = REPO_ROOT / "data" / "db"
     vault_dir: Path = REPO_ROOT / "data" / "vault"
     snapshot_dir: Path = REPO_ROOT / "data" / "snapshots"
+    # Operator-only output: the nightly aggregate usage report
+    # (app/workers/insights.py). Excluded from the repository, because this
+    # repository is public and a usage report is the operator's business even when
+    # it holds no personal data.
+    private_dir: Path = REPO_ROOT / "backend" / "private"
     redis_url: str = "redis://localhost:6379/0"
     qdrant_url: str = "http://localhost:6333"
 
@@ -106,7 +111,7 @@ class Settings(BaseSettings):
             f"http://127.0.0.1:{self.frontend_port}",
         ]
 
-    @field_validator("db_dir", "vault_dir", "snapshot_dir", mode="after")
+    @field_validator("db_dir", "vault_dir", "snapshot_dir", "private_dir", mode="after")
     @classmethod
     def _resolve_dir(cls, v: Path) -> Path:
         return v if v.is_absolute() else (REPO_ROOT / v).resolve()
@@ -135,7 +140,7 @@ class Settings(BaseSettings):
         return self
 
     def ensure_dirs(self) -> None:
-        for d in (self.db_dir, self.vault_dir, self.snapshot_dir):
+        for d in (self.db_dir, self.vault_dir, self.snapshot_dir, self.private_dir):
             d.mkdir(parents=True, exist_ok=True)
 
 
