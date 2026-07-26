@@ -169,7 +169,7 @@ export function EarthScene({ theme }: { theme: "light" | "dark" }) {
       globe.rotation.x += (0.35 - state.zoom * 0.25 - globe.rotation.x) * 0.05;
       const pulse = 1 + Math.sin(t * 2.2) * 0.25;
       ring.scale.setScalar(pulse);
-      (ring.material as THREE.MeshBasicMaterial).opacity = 0.6 * (1 - (pulse - 1) / 0.25 * 0.4);
+      (ring.material as { opacity: number }).opacity = 0.6 * (1 - (pulse - 1) / 0.25 * 0.4);
       renderer.render(scene, camera);
       raf = requestAnimationFrame(render);
     };

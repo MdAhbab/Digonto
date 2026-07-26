@@ -2,14 +2,16 @@ import { Lock, Server, Eye, KeyRound, ShieldCheck, FileWarning } from "lucide-re
 import { useI18n } from "../lib/i18n";
 import { PageHeader } from "../components/PageHeader";
 import { Reveal } from "../components/primitives";
+import { Seo, SEO_ROUTES } from "../lib/seo";
 
 export function Security() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
+  const meta = SEO_ROUTES["/security"];
 
   const commitments = [
     { icon: <Lock className="size-5" />, title: "Encrypted at rest & in transit", body: "Every document you upload is encrypted with AES-256 at rest and TLS 1.3 in transit. Keys are never stored beside the data." },
     { icon: <Eye className="size-5" />, title: "No selling, no referrals", body: "Digonto takes no commission from universities or agents. Your data is never sold, brokered, or used to advertise." },
-    { icon: <KeyRound className="size-5" />, title: "You hold the keys", body: "Passwordless email OTP. You can export or permanently erase your entire vault at any time, no questions asked." },
+    { icon: <KeyRound className="size-5" />, title: "You hold the keys", body: "Your password is hashed with Argon2id and never stored in plain text. You can export or permanently erase your entire vault at any time, no questions asked." },
     { icon: <Server className="size-5" />, title: "Minimal retention", body: "We keep only what your plan needs. Source snapshots are hashed and public; your personal files are private and yours." },
   ];
 
@@ -21,6 +23,7 @@ export function Security() {
 
   return (
     <div>
+      <Seo title={meta.title[lang]} description={meta.description[lang]} path={meta.path} noindex={meta.noindex} lang={lang} />
       <PageHeader eyebrow={t("nav.security")} title={t("sec.title")} sub={t("sec.sub")} />
 
       <div className="mx-auto max-w-[1180px] space-y-16 px-6 py-16 md:px-10">

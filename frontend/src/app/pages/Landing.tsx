@@ -3,13 +3,32 @@ import { ArrowRight, FileSearch, ShieldCheck, BookOpenText, Radar, Quote, HandCo
 import { useI18n } from "../lib/i18n";
 import { useTheme } from "../lib/theme";
 import { EarthScene } from "../components/EarthScene";
-import { Section, Reveal, CitationStamp, motion } from "../components/primitives";
-import { useState, useRef } from "react";
+import { Section, Reveal, Counter, CitationStamp, motion } from "../components/primitives";
+import { useEffect, useState, useRef } from "react";
 import { useInView, useScroll, useTransform } from "motion/react";
+import { Seo, SEO_ROUTES } from "../lib/seo";
+import { api, type MetaStatsOut } from "../lib/api";
 
 export function Landing() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const { theme } = useTheme();
+  const [stats, setStats] = useState<MetaStatsOut | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await api.get<MetaStatsOut>("/meta/stats");
+        if (!cancelled) setStats(result);
+      } catch {
+        // headline stats are a supporting proof-point, not critical path —
+        // the hero and marketing copy render fine without them
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // fade the hero copy out as the earth zooms
   const stageRef = useRef<HTMLDivElement>(null);
@@ -18,8 +37,11 @@ export function Landing() {
   const heroY = useTransform(scrollYProgress, [0, 0.8], [0, -60]);
   const cueOpacity = useTransform(scrollYProgress, [0, 0.15], [1, 0]);
 
+  const meta = SEO_ROUTES["/"];
+
   return (
     <div className="relative">
+      <Seo title={meta.title[lang]} description={meta.description[lang]} path={meta.path} noindex={meta.noindex} lang={lang} />
       {/* Fixed Three.js Earth behind the hero; content below scrolls over it */}
       <div className="pointer-events-none fixed inset-0 z-0">
         <EarthScene theme={theme} />
@@ -84,6 +106,26 @@ export function Landing() {
 
       {/* Everything below covers the fixed Earth */}
       <div className="relative z-10 bg-background">
+        {/* ---------------- HEADLINE STATS (GET /meta/stats) ---------------- */}
+        {stats && (
+          <Section eyebrow={t("stats.eyebrow")} className="py-16">
+            <div className="grid grid-cols-1 gap-px overflow-hidden rounded-[4px] border border-[var(--hairline)] bg-[var(--hairline)] sm:grid-cols-3">
+              {[
+                { s: t("stats.portals"), to: stats.portals_watched },
+                { s: t("stats.snapshots"), to: stats.snapshots_archived },
+                { s: t("stats.questions"), to: stats.questions_answered },
+              ].map((x) => (
+                <Reveal key={x.s}>
+                  <div className="bg-card p-8 text-center">
+                    <div className="font-mono text-3xl text-primary"><Counter to={x.to} /></div>
+                    <p className="mt-2 text-xs text-muted-foreground">{x.s}</p>
+                  </div>
+                </Reveal>
+              ))}
+            </div>
+          </Section>
+        )}
+
         {/* ---------------- PRINCIPLES ---------------- */}
         <Section eyebrow={t("principle.eyebrow")} className="py-24">
           <Reveal>

@@ -2,7 +2,7 @@ import { BrowserRouter, Routes, Route } from "react-router";
 import { ThemeProvider } from "./lib/theme";
 import { I18nProvider } from "./lib/i18n";
 import { AuthProvider } from "./lib/auth";
-import { RequireAuth } from "./components/RequireAuth";
+import { RequireAuth, RequireRole } from "./components/RequireAuth";
 import { Layout } from "./components/layout/Layout";
 import { Landing } from "./pages/Landing";
 import { Planner } from "./pages/Planner";
@@ -15,6 +15,7 @@ import { Ledger } from "./pages/Ledger";
 import { Security } from "./pages/Security";
 import { About } from "./pages/About";
 import { Auth } from "./pages/Auth";
+import { Moderator } from "./pages/Moderator";
 import { NotFound } from "./pages/NotFound";
 
 export default function App() {
@@ -32,6 +33,8 @@ export default function App() {
                 <Route path="/vault" element={<RequireAuth><Vault /></RequireAuth>} />
                 <Route path="/funding" element={<RequireAuth><Funding /></RequireAuth>} />
                 <Route path="/interview" element={<RequireAuth><Interview /></RequireAuth>} />
+                {/* Moderator console — session + role gated */}
+                <Route path="/moderator" element={<RequireRole role="moderator"><Moderator /></RequireRole>} />
                 {/* Public pages */}
                 <Route path="/destinations" element={<Destinations />} />
                 <Route path="/ledger" element={<Ledger />} />

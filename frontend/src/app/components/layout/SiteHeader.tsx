@@ -25,6 +25,8 @@ export function SiteHeader() {
   const [open, setOpen] = useState(false);
   const loc = useLocation();
   const locked = (to: string) => !session && isGated(to);
+  const isModerator = session?.role === "moderator" || session?.role === "admin";
+  const navLinks = isModerator ? [...links, { to: "/moderator", key: "nav.moderator" }] : links;
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-[var(--hairline)] bg-background/85 backdrop-blur-md">
@@ -34,7 +36,7 @@ export function SiteHeader() {
         </Link>
 
         <nav className="hidden items-center gap-1.5 lg:flex">
-          {links.map((l) => (
+          {navLinks.map((l) => (
             <NavLink
               key={l.to}
               to={l.to}
@@ -102,7 +104,7 @@ export function SiteHeader() {
                 </button>
               </div>
               <nav className="flex flex-col p-3">
-                {[{ to: "/", key: "nav.home" }, ...links, { to: "/ledger", key: "nav.ledger" }, { to: "/security", key: "nav.security" }, { to: "/about", key: "nav.about" }].map((l) => (
+                {[{ to: "/", key: "nav.home" }, ...navLinks, { to: "/ledger", key: "nav.ledger" }, { to: "/security", key: "nav.security" }, { to: "/about", key: "nav.about" }].map((l) => (
                   <Link
                     key={l.to}
                     to={l.to}

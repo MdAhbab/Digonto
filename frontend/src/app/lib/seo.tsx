@@ -132,6 +132,7 @@ export type SeoRoutePath =
   | "/vault"
   | "/funding"
   | "/interview"
+  | "/moderator"
   | "*";
 
 export interface SeoRouteMeta {
@@ -274,6 +275,18 @@ export const SEO_ROUTES: Record<SeoRoutePath, SeoRouteMeta> = {
     description: {
       bn: "ভিসা সাক্ষাৎকারের জন্য বাস্তব প্রশ্ন দিয়ে অনুশীলন করুন — সাইন-ইন প্রয়োজন।",
       en: "Practice for your visa interview with realistic questions — sign-in required.",
+    },
+    noindex: true,
+  },
+  "/moderator": {
+    path: "/moderator",
+    title: {
+      bn: "মডারেটর কনসোল — দিগন্ত",
+      en: "Moderator Console — Digonto",
+    },
+    description: {
+      bn: "পরিবর্তন পর্যালোচনা, উত্তর যাচাই ও ব্যবহারকারী তদারকির মডারেটর কনসোল — সাইন-ইন প্রয়োজন।",
+      en: "The moderator console for change review, answer verification, and user oversight — sign-in required.",
     },
     noindex: true,
   },
