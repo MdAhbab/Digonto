@@ -58,7 +58,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # str fields, not bytes, out of this client.
     redis_client: Redis = Redis.from_url(settings.redis_url, decode_responses=True)
     bus = EventBus(redis_client, dbs.events)
-    http_client = httpx.AsyncClient()
+    # An explicit timeout, because httpx's default is 5 seconds and this client is
+    # shared with the model router and the embedder. Cold-loading an embedding model
+    # takes longer than 5 seconds on a small machine, so every question failed with a
+    # bare `ReadTimeout` once bge-m3 had been evicted from memory: the retrieval
+    # fallback could not help, because the request died before retrieval was reached.
+    #
+    # Split rather than a single float. A slow *connect* means the model server is not
+    # there and should fail quickly; a slow *read* means it is loading or generating and
+    # should be waited for. One number cannot express both.
+    http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=5.0, read=180.0, write=30.0, pool=10.0)
+    )
     model_router = ModelRouter(settings, client=http_client)
 
     # Retrieval clients are built once here, not per question. Constructing them
@@ -68,7 +79,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # describes. Both are corrected by owning them for the process lifetime.
     qdrant = AsyncQdrantClient(url=settings.qdrant_url)
     embedder = Embedder(settings, redis=redis_client, client=http_client)
-    retriever = Retriever(embedder, settings, qdrant=qdrant)
+    # `db=dbs.app` gives the retriever the SQLite lexical fallback, so a Qdrant
+    # outage or an unpublished first knowledge version degrades recall instead of
+    # taking every question down. See Retriever.lexical_only.
+    retriever = Retriever(embedder, settings, qdrant=qdrant, db=dbs.app)
     semantic_cache = SemanticCache(embedder, settings, qdrant=qdrant)
     await retriever.ensure_collections()
 

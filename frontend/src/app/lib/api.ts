@@ -445,6 +445,45 @@ export interface User {
   deletion_scheduled_for?: string | null;
 }
 
+/* --- Profile (GET/PATCH /me/profile) -------------------------------------
+ *
+ * These types did not exist in the client. The endpoints did, which is how the fields
+ * every agent reasons from ended up settable only by the demo seed.
+ */
+
+export type DegreeLevel = "bachelor" | "master" | "phd" | "diploma";
+export type EnglishTest = "ielts" | "toefl" | "duolingo" | "pte" | "none";
+
+export interface EnglishSub {
+  listening: number | null;
+  reading: number | null;
+  writing: number | null;
+  speaking: number | null;
+}
+
+export interface ProfileOut {
+  display_name: string | null;
+  home_district: string | null;
+  degree_level: DegreeLevel | null;
+  field_of_study: string | null;
+  cgpa: number | null;
+  cgpa_scale: number | null;
+  graduation_year: number | null;
+  english_test: EnglishTest | null;
+  english_overall: number | null;
+  english_sub: EnglishSub | null;
+  budget_bdt: number | null;
+  intake_target: string | null;
+  study_gap_years: number;
+  updated_at: string;
+}
+
+/** PATCH body. Every field optional; `null` means "clear this", and a field left out
+ *  entirely is untouched, which is what lets a partial form save safely. */
+export type ProfilePatch = Partial<Omit<ProfileOut, "updated_at" | "study_gap_years">> & {
+  study_gap_years?: number | null;
+};
+
 export interface AuthResponse {
   access_token: string;
   expires_in: number;
@@ -492,6 +531,14 @@ export interface AskRefusalEvent {
   reason_en: string;
   reason_bn: string;
   watching_portal_ids: string[];
+}
+
+/** Emitted when the answer was built from the SQLite lexical fallback because the
+ *  vector index returned nothing. The citations are real snapshots either way, so
+ *  this is a recall warning, not a trust warning. */
+export interface AskDegradedEvent {
+  reason_en: string;
+  reason_bn: string;
 }
 
 export interface AskDoneEvent {
@@ -732,7 +779,9 @@ export interface ScholarshipOut {
   id: string;
   name: string;
   country: string | null;
-  coverage: number | null;
+  amount: number | null;
+  currency: string | null;
+  coverage_type: CoverageType | null;
   deadline: string | null;
   score: number;
   rank: number;
@@ -744,9 +793,6 @@ export interface ScholarshipOut {
 
 export interface ScholarshipDetail extends ScholarshipOut {
   provider: string;
-  coverage_type: CoverageType | null;
-  amount: number | null;
-  currency: string | null;
   url: string;
 }
 

@@ -32,6 +32,7 @@ from app.llm.router import LLMRequest, ModelRouter, TaskKind
 from app.rag.cache import SemanticCache
 from app.rag.embeddings import Embedder
 from app.rag.retrieval import Passage, Retriever
+from app.rag.student_context import STUDENT_CONTEXT_RULE
 from app.security.framing import DATA_ONLY_RULE, frame_untrusted
 
 log = logging.getLogger(__name__)
@@ -191,6 +192,7 @@ async def stream_grounded_answer(
     router: ModelRouter,
     retriever: Retriever,
     cache: SemanticCache,
+    student_context: str = "",
 ) -> AsyncIterator[dict[str, Any]]:
     """Yield the event sequence AskService consumes.
 
@@ -221,7 +223,13 @@ async def stream_grounded_answer(
     try:
         # 1. Semantic cache. A hit is valid only under the knowledge version
         #    that is live now, which lookup() enforces.
-        hit = await cache.lookup(
+        # Only questions answered *without* a profile are cache-eligible. The cache key
+        # is (kb_version, country, lang), which cannot distinguish two students, so a
+        # personalised answer put in it would be served to whoever asked next. Sharing
+        # one student's stated budget or test score with another is the kind of leak that
+        # is obvious in hindsight and invisible in a diff, so the personalised path skips
+        # the cache in both directions: no lookup, and no store.
+        hit = None if student_context else await cache.lookup(
             question, kb_version_id=kb_version_id, country=country, lang=primary
         )
         if hit is not None:
@@ -260,7 +268,12 @@ async def stream_grounded_answer(
 
         # 2. Retrieve. An empty result is a refusal, never an answer from model
         #    memory: the knowledge store is the only permitted source of fact.
-        passages = await retriever.search(question, country=country)
+        #
+        #    `degraded` means the answer was built from the SQLite lexical fallback
+        #    because the vector store returned nothing. The passages and their
+        #    citations are just as real, so this is a quality warning rather than a
+        #    trust warning, and it is reported rather than hidden.
+        passages, degraded = await retriever.search(question, country=country)
         if not passages:
             yield {
                 "kind": "refusal",
@@ -268,29 +281,62 @@ async def stream_grounded_answer(
                 "reason_bn": NO_SOURCE_BN,
                 "watching_portal_ids": [],
             }
-            await cache.store(
-                question,
-                kb_version_id=kb_version_id,
-                country=country,
-                lang=primary,
-                answer_primary="",
-                answer_alt="",
-                alt_lang=alt_lang,
-                citations=[],
-                confidence=0.0,
-                is_refusal=True,
-                refusal_reason_en=NO_SOURCE_EN,
-                refusal_reason_bn=NO_SOURCE_BN,
-            )
+            if not student_context:
+                await cache.store(
+                    question,
+                    kb_version_id=kb_version_id,
+                    country=country,
+                    lang=primary,
+                    answer_primary="",
+                    answer_alt="",
+                    alt_lang=alt_lang,
+                    citations=[],
+                    confidence=0.0,
+                    is_refusal=True,
+                    refusal_reason_en=NO_SOURCE_EN,
+                    refusal_reason_bn=NO_SOURCE_BN,
+                )
             return
 
+        if degraded:
+            yield {
+                "kind": "degraded",
+                "reason_en": (
+                    "The vector index is unavailable, so this answer was found by "
+                    "keyword search over the same archived sources. Every citation "
+                    "below is still a real snapshot, but a closely worded source may "
+                    "have been missed."
+                ),
+                "reason_bn": (
+                    "ভেক্টর ইনডেক্স এখন পাওয়া যাচ্ছে না, তাই একই সংরক্ষিত উৎসের ওপর "
+                    "কীওয়ার্ড অনুসন্ধান করে এই উত্তরটি পাওয়া গেছে। নিচের প্রতিটি উদ্ধৃতি "
+                    "সত্যিকারের স্ন্যাপশট, তবে কাছাকাছি শব্দের কোনো উৎস বাদ পড়ে থাকতে পারে।"
+                ),
+            }
+
         by_public_id = {p.snapshot_public_id: p for p in passages}
-        user_prompt = f"SOURCE PASSAGES:\n{_frame_sources(passages)}\n\nQUESTION: {question}"
+        # The student's own facts sit between the evidence and the question, so the model
+        # reads the sources first and the person second. Leading with the profile
+        # encourages an answer about the student instead of one grounded in the passages.
+        user_prompt = f"SOURCE PASSAGES:\n{_frame_sources(passages)}\n\n"
+        if student_context:
+            user_prompt += f"ABOUT THE STUDENT ASKING:\n{student_context}\n\n"
+        user_prompt += f"QUESTION: {question}"
 
         request = LLMRequest(
             kind=TaskKind.GROUNDED_ANSWER,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "system",
+                    # The profile rule is added only when a profile is present. Telling
+                    # the model how to treat a block that is not there wastes context and
+                    # invites it to remark on the absence.
+                    "content": (
+                        f"{SYSTEM_PROMPT}\n{STUDENT_CONTEXT_RULE}"
+                        if student_context
+                        else SYSTEM_PROMPT
+                    ),
+                },
                 {"role": "user", "content": user_prompt},
             ],
             json_schema=ANSWER_SCHEMA,
@@ -419,19 +465,20 @@ async def stream_grounded_answer(
             "answer_primary": answer_primary,
         }
 
-        await cache.store(
-            question,
-            kb_version_id=kb_version_id,
-            country=country,
-            lang=primary,
-            answer_primary=answer_primary,
-            answer_alt=answer_alt,
-            alt_lang=alt_lang,
-            citations=citation_payloads,
-            confidence=data.get("confidence"),
-            is_refusal=False,
-            snapshot_ids=[p.snapshot_id for p in passages],
-        )
+        if not student_context:
+            await cache.store(
+                question,
+                kb_version_id=kb_version_id,
+                country=country,
+                lang=primary,
+                answer_primary=answer_primary,
+                answer_alt=answer_alt,
+                alt_lang=alt_lang,
+                citations=citation_payloads,
+                confidence=data.get("confidence"),
+                is_refusal=False,
+                snapshot_ids=[p.snapshot_id for p in passages],
+            )
     except GeneratorExit:
         # The client disconnected mid-stream. Nothing here owns a connection, so
         # there is nothing to release; re-raise so the generator closes promptly

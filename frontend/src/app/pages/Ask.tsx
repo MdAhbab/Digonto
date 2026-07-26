@@ -15,6 +15,7 @@ import {
   type AskMetaEvent,
   type AskCitationEvent,
   type AskAltEvent,
+  type AskDegradedEvent,
   type AskRefusalEvent,
   type AskDoneEvent,
   type SnapshotDetail,
@@ -35,6 +36,10 @@ interface Exchange {
   refusal: Refusal | null;
   streaming: boolean;
   error: ApiError | null;
+  /** The answer came from the lexical fallback because the vector index returned
+      nothing. Citations are real either way, so this is shown as a recall caveat
+      above the answer rather than replacing it. */
+  degraded: string | null;
 }
 
 function fromHistory(item: QAItem): Exchange {
@@ -47,6 +52,9 @@ function fromHistory(item: QAItem): Exchange {
     refusal: item.refusal ? { reason_en: "", reason_bn: "", watching_portal_ids: [] } : null,
     streaming: false,
     error: null,
+    // History does not record whether an answer was served from the fallback; the
+    // caveat is about how this answer was just found, not a durable property of it.
+    degraded: null,
   };
 }
 
@@ -113,7 +121,7 @@ export function Ask() {
     const citationsByOrdinal: Citation[] = [];
     setItems((prev) => [
       ...prev,
-      { id: localId, q, answerEn: "", answerBn: "", citations: [], refusal: null, streaming: true, error: null },
+      { id: localId, q, answerEn: "", answerBn: "", citations: [], refusal: null, streaming: true, error: null, degraded: null },
     ]);
 
     const patch = (fn: (ex: Exchange) => Exchange) => {
@@ -146,6 +154,9 @@ export function Ask() {
           },
           alt: (data: AskAltEvent) => {
             patch((ex) => (data.lang === "bn" ? { ...ex, answerBn: data.text } : { ...ex, answerEn: data.text }));
+          },
+          degraded: (data: AskDegradedEvent) => {
+            patch((ex) => ({ ...ex, degraded: lang === "bn" ? data.reason_bn : data.reason_en }));
           },
           refusal: (data: AskRefusalEvent) => {
             patch((ex) => ({
@@ -313,6 +324,12 @@ function Exchange({ qa, onCite }: { qa: Exchange; onCite: (snapshotId: string) =
 
       {/* typeset answer */}
       <div className="border-l border-[var(--hairline)] pl-6">
+        {qa.degraded && !qa.refusal && !qa.error && (
+          <p className="mb-4 border-l-2 border-[var(--gold)] pl-3 text-xs leading-relaxed text-muted-foreground">
+            {qa.degraded}
+          </p>
+        )}
+
         {qa.refusal ? (
           <div className="rounded-[4px] border border-[var(--hairline)] bg-secondary/40 p-6">
             <div className="mb-3 flex items-center gap-2 text-muted-foreground">

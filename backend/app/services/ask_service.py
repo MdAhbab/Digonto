@@ -21,6 +21,7 @@ generation was cut off after tokens were already shown.
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from collections.abc import AsyncIterator
@@ -32,7 +33,12 @@ from app.rag.pipeline import stream_grounded_answer
 from app.repositories._util import utc_now_iso
 from app.repositories.answer_repo import AnswerRepo
 from app.repositories.conversation_repo import ConversationRepo
+from app.repositories.profile_repo import ProfileRepo
 from app.repositories.snapshot_repo import SnapshotRepo
+from app.repositories.target_repo import TargetRepo
+from app.rag.student_context import build_student_context
+
+log = logging.getLogger(__name__)
 
 _BANGLA_RANGE = re.compile(r"[ঀ-৿]")
 
@@ -76,6 +82,8 @@ class AskService:
         router: ModelRouter,
         retriever: Retriever,
         cache: SemanticCache,
+        profiles: ProfileRepo | None = None,
+        targets: TargetRepo | None = None,
     ) -> None:
         self._conversations = conversations
         self._answers = answers
@@ -84,6 +92,11 @@ class AskService:
         self._router = router
         self._retriever = retriever
         self._cache = cache
+        # Optional so existing constructions in tests keep working. When both are
+        # supplied, the answer is tailored to the student who asked; when they are not,
+        # the behaviour is exactly what it was.
+        self._profiles = profiles
+        self._targets = targets
 
     async def stream_answer(
         self, *, user_id: int, user_public_id: str, question: str,
@@ -127,12 +140,37 @@ class AskService:
         confidence: float | None = None
         is_refusal = False
         incomplete = False
+        degraded = False
         refusal_reason: str | None = None
         served_by = "local"
         cache_hit = False
         model_tag = "unknown"
         token_count = 0
         answer_row: dict[str, Any] | None = None
+
+        # The student's own facts, so the same question from two students gets two
+        # answers. Built here rather than in the pipeline because the pipeline has no
+        # user id and should not acquire one: it answers questions, it does not know who
+        # is asking.
+        student_context = ""
+        if self._profiles is not None:
+            try:
+                profile = await self._profiles.get(user_id)
+                targets = await self._targets.list_targets(user_id) if self._targets else []
+                student_context = build_student_context(profile, targets)
+                # Personalised retrieval, not just personalised wording. When the student
+                # did not name a country, their own shortlist is the best available
+                # filter: a UK applicant asking about "financial evidence" should not be
+                # shown Canada's rule. Applied only when every target agrees, because
+                # narrowing to one of several destinations would silently answer about
+                # the wrong one, which is worse than not narrowing at all.
+                if country is None and targets:
+                    codes = {t.get("country_code") for t in targets if t.get("country_code")}
+                    if len(codes) == 1:
+                        country = codes.pop()
+            except Exception:  # noqa: BLE001 - personalisation must never break answering
+                log.exception("could not build student context for user_id=%s", user_id)
+                student_context = ""
 
         try:
             pipeline = stream_grounded_answer(
@@ -143,6 +181,7 @@ class AskService:
                 router=self._router,
                 retriever=self._retriever,
                 cache=self._cache,
+                student_context=student_context,
             )
             async for event in pipeline:
                 kind = event.get("kind")
@@ -216,6 +255,16 @@ class AskService:
                         "reason_bn": event.get("reason_bn", ""),
                         "watching_portal_ids": event.get("watching_portal_ids", []),
                     }
+                elif kind == "degraded":
+                    # Built from the SQLite lexical fallback because the vector store
+                    # returned nothing. The citations are real, so this is a recall
+                    # warning rather than a trust warning; the client is told so that
+                    # a lexical-only answer is not presented as a full-pipeline one.
+                    degraded = True
+                    yield "degraded", {
+                        "reason_en": event.get("reason_en", ""),
+                        "reason_bn": event.get("reason_bn", ""),
+                    }
                 elif kind == "incomplete":
                     # Generation was cut off after tokens had already been shown.
                     # The text stands, but it carries no citations, so the client
@@ -234,6 +283,15 @@ class AskService:
                         else:
                             answer_en = event["answer_primary"]
         except Exception as exc:  # noqa: BLE001 - convert to a terminal SSE `error` event
+            # Logged with the traceback, and the class name is recorded on the event.
+            # `str(exc)` alone was the only record of a pipeline failure, and it is
+            # empty for every exception raised without a message, which is most of
+            # the interesting ones: a bare TimeoutError or CancelledError produced an
+            # `ANSWER_FAILED` event saying nothing whatsoever.
+            log.exception(
+                "ask pipeline failed for question=%s user_id=%s",
+                question_row["public_id"], user_id,
+            )
             yield "error", {
                 "type": "https://digonto.ahbab.dev/errors/ask-pipeline-failed",
                 "title": "Could not generate an answer",
@@ -247,7 +305,7 @@ class AskService:
                 user_id=user_id,
                 subject_type="question",
                 subject_id=question_row["public_id"],
-                payload={"error": str(exc)},
+                payload={"error": str(exc) or repr(exc), "error_type": type(exc).__name__},
             )
             return
 
@@ -293,6 +351,7 @@ class AskService:
             "confidence": confidence,
             "tokens": token_count,
             "incomplete": incomplete,
+            "degraded": degraded,
         }
 
     # -- history, feedback, conversations --------------------------------

@@ -268,3 +268,27 @@ def test_the_other_hidden_text_conventions_are_stripped_too() -> None:
     _n, passages = normalise_and_extract(html)
     assert passages[0]["section_path"] == "Money you need"
     assert len(passages) == 1
+
+
+# --- retrieval degradation ---------------------------------------------------
+
+
+def test_lexical_fallback_exists_and_search_reports_when_it_was_used() -> None:
+    """The vector store was a single point of failure for the whole product.
+
+    `dense()` returned [] when no collection was live, `search()` returned nothing, and
+    the pipeline refused. Each step was correct and the composition answered nothing at
+    all, including for questions whose answer was in the same database as the question.
+    """
+    import inspect
+
+    from app.rag.retrieval import Retriever
+
+    assert hasattr(Retriever, "lexical_only")
+    src = inspect.getsource(Retriever.search)
+    # The contract is `(passages, degraded)`, so a caller cannot use the result without
+    # deciding what to do about the degradation.
+    assert "return fallback, True" in src
+    assert "return ranked[: self._s.retrieval_rerank_to], False" in src
+    # An embedding failure must not be fatal when a working lexical path exists.
+    assert "except Exception" in src and "falling back to lexical" in src
