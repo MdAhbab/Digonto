@@ -154,7 +154,8 @@ identified, excluded from statistics, and wiped with one command.
 | GET / PATCH | `/me/profile` | student profile |
 | PUT | `/me/consents` | toggle the three consents |
 | GET | `/me/export` | full data export, JSON + files, as a signed download |
-| DELETE | `/me` | hard delete. Requires the current password in the body; see section 13 |
+| DELETE | `/me` | schedule deletion 30 days out. Requires the current password in the body; see section 13 |
+| POST | `/me/deletion/cancel` | cancel a scheduled deletion. No password: the session already proved it |
 | GET | `/destinations` | country catalogue, public |
 | GET | `/me/shortlist` | shortlisted countries |
 | PUT | `/me/shortlist/{country_code}` | add |
@@ -591,12 +592,32 @@ codebase assembles that archive or sends the email. Section 16 lists this
 explicitly.
 
 **DELETE `/me`** — requires the current password in the body, not a one-time
-password (OTP), because this system has no OTP subsystem at all; see section
-3. Deletes vault files,
-cascades `app.db`, anonymises `events.db` rows rather than deleting them (the
-audit trail survives without identifying anyone), deletes replay samples, and
-emits `user.deleted`. Returns `202` with a receipt in the response body; no
-email is sent, because nothing in this codebase sends email.
+password (OTP), because this system has no OTP subsystem at all; see section 3.
+
+**Schedules** deletion for 30 days out (`019_account_deletion_window.sql`); it no
+longer deletes inline. The `202` was previously describing work that had already
+finished, and is now literally true. The receipt carries `scheduled_for`, because a
+promise to delete "within 30 days" that does not name the day is not something a
+student can hold the service to. Every refresh token is revoked, so the interface signs
+out; signing back in with the password is the recovery path, which matters when the
+request came from a session that should not have had access. Asking twice does not move
+the date, so a student who re-confirms on day 29 does not buy another 30 days of
+retention. No email is sent, because nothing in this codebase sends email.
+
+The erasure itself runs in `app/workers/retention.py` (`purge_due_accounts`) once the
+date passes, and is the same operation that used to run inline: vault files unlinked,
+`app.db` cascaded, `events.db` rows anonymised rather than deleted so the audit trail
+survives without naming anyone, replay samples deleted, feedback detached from its
+author, and `user.deleted` emitted. Each account is purged independently, so one
+failure leaves that row scheduled for the next night instead of blocking the queue
+behind it. `docs/privacy.md` states what survives and why;
+`backend/tests/test_account_deletion.py` walks every table with a user-referring column
+and fails if anything still points at a purged account.
+
+**POST `/me/deletion/cancel`** — clears the schedule. Deliberately no password: a
+student who wants to keep their account must not have a harder path than one who wants
+to destroy it. Returns `cancelled`, or `not_scheduled` if nothing was pending, rather
+than an error, because "nothing to cancel" is not a failure.
 
 **POST `/me/consents/withdraw`** — specified behaviour: withdrawing
 `improve_model` deletes the user's replay samples and flags every adapter
@@ -605,6 +626,45 @@ if the data is already in a model. As built, this endpoint raises rather than
 silently doing less than that: no repository exposes "delete this user's
 replay samples" or "flag adapters trained on them" outside of full account
 deletion. Section 16 has the detail.
+
+---
+
+## 13a. Feedback
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/feedback` | one message. **No auth required** |
+| GET | `/mod/feedback?unreviewed=` | moderator queue, unreviewed first |
+| PATCH | `/mod/feedback/{id}` | set `disposition`; records the reviewer |
+
+**POST `/feedback`** takes `{kind, message, page, lang, contact_email}`. `kind` is one
+of `bug`, `confusing`, `wrong_answer`, `idea`, `praise`, `other`, and an unrecognised
+value is coerced to `other` rather than rejected: a client sending a kind we do not know
+still has a message worth keeping.
+
+Open to signed-out callers on purpose. The most useful report about a product built for
+people who find official English hard to read comes from someone who never got as far
+as making an account, and requiring a login filters out exactly that person.
+
+`contact_email` is optional and is never pre-filled from the account. A signed-in
+student who leaves it blank has chosen not to be contacted about this message, and
+copying it from `users.email` would overrule that silently.
+
+Two rate limits apply. The Redis limiter (section 14) covers bursts. A second check
+counts what is actually stored in the last hour, so a Redis restart cannot reset
+somebody's allowance: 10 per account, and a single shared ceiling of 60 for anonymous
+submissions. The shared ceiling is deliberate, and its weakness is stated rather than
+hidden: it can be exhausted by one bad actor. The alternative is storing an IP address
+in order to police a feedback form, which would collect more about the person than the
+feedback does. The failure mode of the shared bucket is a form that says "try again
+later"; the failure mode of the alternative is a log of who complained from where.
+
+The response is a receipt (`id`, `status`, `created_at`) and not the stored row, so the
+endpoint cannot be used to read back what somebody else submitted.
+
+A purged account's feedback survives with `user_id` and `contact_email` set to NULL: a
+defect report is about the product, a maintainer may still be working from it, and it
+stops being attributable at the moment the account is erased.
 
 ---
 

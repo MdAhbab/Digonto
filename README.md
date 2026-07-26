@@ -82,13 +82,28 @@ DOIs are in [`docs/paper/references.bib`](docs/paper/references.bib).
 | **52,799** | Bangladeshi students studying abroad in 2023, across 55 countries. Roughly three times the number fifteen years earlier. |
 | **$667.77M** | Left the country for overseas education in FY25 alone, through 109,290 banking transactions. A record for a single year. |
 | **Hundreds** | Consultancy firms operating in Bangladesh, with no mandatory registration system for this specific sector. Most run on a general trade licence with no specialised supervision. |
-| **54.90%** | Schengen visa refusal rate for Bangladeshi applicants in 2024: 20,957 refusals out of 39,345 applications, up from 42.8% in 2023. Every refusal also costs a non-refundable fee. |
+| **54.90%** | Schengen visa refusal rate for Bangladeshi applicants in 2024: 20,957 refusals out of 39,345 applications, up from 43.3% in 2023 (both rates are the European Commission's own published figures, computed over a narrower category of decisions than the total application count, which is why 20,957 of 39,345 is not 54.90%). Every refusal also costs a non-refundable fee. |
 | **~65%** | Of applications from India and Bangladesh to one United States university found likely fraudulent, much of it traced to agents. |
 
 The information a student needs is already public. It is also written in dense
 administrative English, spread across dozens of portals, and revised without
 announcement. Digonto reads those portals so the student does not have to, and
 answers in clear Bangla with a citation for every claim.
+
+## Your data
+
+`docs/privacy.md` states what is stored, what deleting an account removes, and the two
+things that outlive it. Both exceptions are named there rather than left unlisted, and
+`backend/tests/test_account_deletion.py` walks every table with a user-referring column
+and fails if anything still points at a purged account.
+
+Deletion is scheduled 30 days out and is reversible for that window. Immediate
+irreversible deletion was the previous behaviour and is the wrong default when the data
+is somebody's visa paperwork: a mistyped confirmation destroyed the encryption keys
+along with the record.
+
+Feedback goes through the form at the bottom of the home page. It needs no account, and
+it does not ask for an email address unless you want a reply.
 
 ## What Digonto is not
 

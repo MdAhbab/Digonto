@@ -186,8 +186,12 @@ facts, explaining the legal consequences of visa fraud.
 
 Inference is self-hosted, so documents never leave the deployment. Vault files
 are encrypted at rest with per-user keys. The replay buffer holds no document
-contents and is PII-scrubbed and consent-gated. Students can export or
-permanently delete everything.
+contents and is PII-scrubbed and consent-gated. Students can export everything, and
+deleting an account erases it within 30 days: the request is reversible for that
+window, because immediate irreversible deletion is the wrong default when the data is
+somebody's visa paperwork. Exactly two things outlive the erasure, and both are listed
+in `docs/privacy.md`: event records with the user id removed, and daily aggregate
+counts that carry no identifier and suppress any group smaller than five.
 
 SDG alignment: Goal 4 (equitable access to higher education), Goal 10 target 10.7
 (safe, orderly, responsible migration), and Goal 16.10 (public access to
