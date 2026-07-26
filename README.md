@@ -281,7 +281,12 @@ and starts the API and web client together.
 | `--reset` | delete local databases and re-seed |
 | `--backend-only` / `--frontend-only` | run one side |
 
-Prerequisites: Python 3.12+, Node 20+, and `ollama pull gemma4:e2b`.
+Prerequisites: Python 3.12 or 3.13, Node 20+, and `ollama pull gemma4:e2b`.
+
+Python 3.14 does not work yet, and `run.py` now says so immediately rather than
+failing partway through the install. The pinned `pydantic-core` has no wheel for
+3.14, and building it from source fails because its bundled PyO3 supports up to
+3.13. The deployed image pins `python:3.12-slim`, so this affects local runs only.
 
 ### Deploy
 

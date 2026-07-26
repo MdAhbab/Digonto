@@ -17,6 +17,7 @@ Useful flags:
     --frontend-only  run the web client alone
     --reset          delete local databases and re-seed from scratch
     --check          run every check and exit without starting anything
+    --verbose-install show pip and npm output when an install fails
 """
 
 from __future__ import annotations
@@ -45,6 +46,10 @@ VENV = ROOT / ".venv"
 FONT_DIR = FRONTEND / "public" / "fonts"
 
 MIN_PYTHON = (3, 12)
+# First version the pinned dependency set cannot install on. pydantic-core ships
+# no wheel for it, and building from source fails because its bundled PyO3
+# supports up to 3.13. Raise this once the pins are updated and verified.
+NEXT_UNSUPPORTED_PYTHON = (3, 14)
 MIN_NODE = 20
 
 IS_WINDOWS = platform.system() == "Windows"
@@ -108,12 +113,26 @@ def run(cmd: list[str], *, cwd: Path | None = None, quiet: bool = True) -> int:
 
 # ------------------------------------------------------------------ prereqs
 def check_python() -> None:
+    found = f"{sys.version_info.major}.{sys.version_info.minor}"
     if sys.version_info < MIN_PYTHON:
+        fail(f"Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ required, found {found}")
+    if sys.version_info >= NEXT_UNSUPPORTED_PYTHON:
+        # Caught only by trying it: on 3.14 the pinned pydantic-core has no
+        # prebuilt wheel, so pip falls back to building it, and its bundled PyO3
+        # refuses to compile against an interpreter newer than 3.13. The failure
+        # surfaced from deep inside a Rust build log, which is not a useful place
+        # to learn that the interpreter is the problem, so it is checked here.
+        supported = f"{MIN_PYTHON[0]}.{MIN_PYTHON[1]} to " \
+                    f"{NEXT_UNSUPPORTED_PYTHON[0]}.{NEXT_UNSUPPORTED_PYTHON[1] - 1}"
         fail(
-            f"Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ required, found "
-            f"{sys.version_info.major}.{sys.version_info.minor}"
+            f"Python {found} is newer than this dependency set supports "
+            f"(needs {supported}).\n"
+            f"       Install one and point this script at it, for example:\n"
+            f"       brew install python@3.12 && python3.12 run.py\n"
+            f"       The deployed image pins python:3.12-slim, so production is "
+            f"unaffected."
         )
-    ok(f"Python {sys.version_info.major}.{sys.version_info.minor}")
+    ok(f"Python {found}")
 
 
 def check_node() -> None:
@@ -256,7 +275,7 @@ def venv_python() -> Path:
     return VENV / ("Scripts/python.exe" if IS_WINDOWS else "bin/python")
 
 
-def install_backend(skip: bool) -> Path:
+def install_backend(skip: bool, verbose: bool = False) -> Path:
     if not VENV.exists():
         step_msg = "creating virtual environment"
         info(step_msg)
@@ -273,8 +292,13 @@ def install_backend(skip: bool) -> Path:
         return py
 
     info("installing Python dependencies (first run takes a minute)")
-    run([str(py), "-m", "pip", "install", "--upgrade", "pip", "--quiet"])
-    rc = run([str(py), "-m", "pip", "install", "-r", str(BACKEND / "requirements.txt"), "--quiet"])
+    pip_base = [str(py), "-m", "pip", "install"]
+    quiet_flag = [] if verbose else ["--quiet"]
+    run(pip_base + ["--upgrade", "pip"] + quiet_flag, quiet=not verbose)
+    rc = run(
+        pip_base + ["-r", str(BACKEND / "requirements.txt")] + quiet_flag,
+        quiet=not verbose,
+    )
     if rc != 0:
         fail("pip install failed. Re-run with --verbose-install to see why")
     ok("Python dependencies installed")
@@ -448,6 +472,12 @@ def main() -> None:
     ap.add_argument("--frontend-only", action="store_true")
     ap.add_argument("--reset", action="store_true")
     ap.add_argument("--check", action="store_true")
+    ap.add_argument(
+        "--verbose-install",
+        action="store_true",
+        help="show pip and npm output instead of hiding it, for diagnosing a "
+             "failed dependency install",
+    )
     args = ap.parse_args()
 
     print(f"{C.BOLD}Digonto{C.X} {C.DIM}local launcher{C.X}")
@@ -467,7 +497,8 @@ def main() -> None:
         reset_data()
 
     step("Installing dependencies")
-    py = install_backend(args.skip_install) if not args.frontend_only else venv_python()
+    py = (install_backend(args.skip_install, args.verbose_install)
+           if not args.frontend_only else venv_python())
     if not args.backend_only:
         install_frontend(args.skip_install)
 
