@@ -39,6 +39,7 @@ from app.repositories.profile_repo import ProfileRepo
 from app.repositories.target_repo import TargetRepo
 from app.routers._sse import SSE_HEADERS, format_sse, sse_comment
 from app.routers.auth import get_auth_service
+from app.routers.destinations import destination_from_row
 from app.services.auth_service import AuthService
 from app.services.profile_service import ProfileService
 
@@ -107,38 +108,25 @@ async def put_consents(
     return User(**updated)
 
 
-@router.post("/consents/withdraw", status_code=status.HTTP_202_ACCEPTED, response_model=None)
+@router.post("/consents/withdraw", status_code=status.HTTP_202_ACCEPTED, response_model=WithdrawReceipt)
 async def withdraw_consent(
     user: Mapping = Depends(get_current_user),
+    dbs: Databases = Depends(get_dbs),
     auth_service: AuthService = Depends(get_auth_service),
-) -> None:
-    """docs/api_contract.md section 13: withdrawing `improve_model` must
-    delete the user's replay samples and flag every adapter trained on them
-    for review, not merely flip a boolean, because "you can withdraw
-    consent" is meaningless if the data already trained a model.
+) -> WithdrawReceipt:
+    """docs/api_contract.md section 13: withdrawing `improve_model` deletes
+    the student's replay samples and flags every adapter that was trained on
+    them, rather than only flipping a boolean. "You can withdraw consent" is
+    meaningless if the data has already trained a model and stays there.
 
-    No repository anywhere in this codebase (see app/repositories/*.py)
-    exposes "delete a user's replay samples" or "flag adapters trained on a
-    given sample set for review"; `AuthService.update_consents` only ever
-    updates the `user_consents` row. The one place in the whole codebase
-    that touches `learn.db.replay_samples` for a user is
-    `AuthService.delete_account`, which does it with a raw SQL DELETE
-    against a `Database` handle passed in by app/main.py's lifespan, not
-    through a repository, and only as part of full account deletion.
-
-    Flipping `improve_model` to `False` here without also deleting the
-    samples would be worse than not implementing this endpoint: it would
-    look like the privacy promise was honoured when the data a model may
-    already have trained on is untouched. Raising instead of doing that.
+    202 rather than 200 because the flagged adapters still need a human to
+    decide whether to retrain or roll back. The deletion itself is complete
+    when this returns; the review is what is outstanding.
     """
-    raise NotImplementedError(
-        "POST /me/consents/withdraw needs a way to delete this user's "
-        "learn.db.replay_samples and flag every learn.db.adapters row "
-        "trained on them for review. No repository exposes either "
-        "operation; app/services/auth_service.py's own delete_account is "
-        "the only code that touches replay_samples, and only for full "
-        "account deletion via a raw SQL statement, not a reusable method."
+    receipt = await auth_service.withdraw_learning_consent(
+        user["id"], app_db=dbs.app, learn_db=dbs.learn
     )
+    return WithdrawReceipt(**receipt)
 
 
 @router.get("/export", response_model=ExportReceipt)
@@ -174,16 +162,12 @@ async def get_shortlist(
     user: Mapping = Depends(get_current_user),
     profiles: ProfileService = Depends(get_profile_service),
 ) -> Page[DestinationOut]:
-    # See destinations.py's module docstring: `countries` has no lat/lng or
-    # note_en/note_bn columns and no citation link, so `DestinationOut` (which
-    # requires them) cannot be built from real data without a migration.
-    # Rather than fabricate coordinates or citation text, this raises rather
-    # than silently shipping placeholder geography. Listed in the final report.
-    raise NotImplementedError(
-        "GET /me/shortlist needs DestinationOut.{lat,lng,note_en,note_bn}, which "
-        "have no backing column on `countries` (docs/database.md section 3.2). "
-        "Adding them is a migration, out of scope for the router-only build."
-    )
+    # Same row shape as GET /destinations, filtered to the starred ones, so
+    # both surfaces share destinations.destination_from_row rather than
+    # keeping two mappings that can drift apart.
+    rows = await profiles.list_destinations(user["id"])
+    items = [destination_from_row(r) for r in rows if r.get("shortlisted")]
+    return Page(items=items, next_cursor=None, total=len(items))
 
 
 @router.put("/shortlist/{country_code}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)

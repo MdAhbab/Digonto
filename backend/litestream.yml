@@ -1,0 +1,112 @@
+# Litestream replication config for the three SQLite files in docs/database.md
+# section 0 (app.db, events.db, learn.db). Mounted read-only into the `backup`
+# service in docker-compose.prod.yml at /etc/litestream.yml, run as
+# `litestream replicate -config /etc/litestream.yml`.
+#
+# =============================================================================
+# ENV VARS TO SET (all optional; see "no-op by default" below)
+# =============================================================================
+#   LITESTREAM_REPLICA_TYPE     Set to exactly "s3" to turn on off-VM
+#                               replication. This is the master switch: every
+#                               variable below is ignored, silently, until
+#                               this one is set. That is deliberate (see the
+#                               explanation further down), not an oversight.
+#   LITESTREAM_BUCKET           Destination bucket name.
+#   LITESTREAM_ENDPOINT         Full URL including scheme, e.g.
+#                               https://s3.eu-central-003.backblazeb2.com or
+#                               https://<account>.r2.cloudflarestorage.com.
+#                               Leave unset only when LITESTREAM_BUCKET is a
+#                               real AWS S3 bucket. ALWAYS use https://, never
+#                               http:// (see encryption note below).
+#   LITESTREAM_REGION           e.g. us-east-1, auto (Cloudflare R2), or
+#                               whatever your provider calls it.
+#   LITESTREAM_ACCESS_KEY_ID
+#   LITESTREAM_SECRET_ACCESS_KEY
+#   LITESTREAM_SSE_KMS_KEY_ID   Optional. If your provider supports SSE-KMS,
+#                               setting this turns it on for every object
+#                               Litestream writes (see encryption note).
+#
+# =============================================================================
+# WHY THIS FILE DOES NOT CRASH-LOOP WITH NOTHING SET
+# =============================================================================
+# Litestream (this is the current LTX-based release, not the older v0.3.x
+# line) hard-requires a working replica destination for every database it is
+# told to watch: a `replica:` block with an empty bucket is a startup error
+# ("bucket required for s3 replica"), not a warning, and a db with no replica
+# block at all is a *different* startup error ("must specify replica for
+# database"). Under `restart: unless-stopped` either one is a genuine
+# crash-loop, which is exactly what this file must not do on a deploy with no
+# backup destination configured yet.
+#
+# The escape hatch is in Litestream's own type-resolution rule: a replica's
+# effective type is whatever `type:` says, or whatever the `url:` scheme
+# implies, or "file" if neither is set. So every replica below always carries
+# a real, static, always-valid local `path:` (on the same `appdata` volume the
+# source databases already live on), and `type:` is left to resolve from
+# LITESTREAM_REPLICA_TYPE. With that variable unset, `type:` expands to an
+# empty string, Litestream falls through to "file", and it replicates locally
+# to /data/litestream/<name>/ instead of erroring out. That is a real,
+# working replica (protects against WAL corruption and accidental deletion of
+# the live file) rather than a true do-nothing no-op, because Litestream has
+# no do-nothing replica type to fall back to; it is also not off-VM backup,
+# which is the whole point of setting LITESTREAM_REPLICA_TYPE=s3 for a real
+# deployment. Once that variable is "s3", the exact same `path:` value below
+# is reused as the object-key prefix inside the bucket rather than a
+# filesystem path, which is harmless and keeps the three databases from
+# colliding under one prefix.
+#
+# =============================================================================
+# ENCRYPTION: REPLICAS MUST BE ENCRYPTED BEFORE THEY LEAVE THE VM
+# =============================================================================
+# This LTX-based Litestream release removed client-side (age) replica
+# encryption; passing age keys is a hard configuration error today ("age
+# encryption is not currently supported, if you need encryption please revert
+# back to Litestream v0.3.x"). Litestream itself will not encrypt these
+# replicas for you. That means encryption is YOUR responsibility, in two
+# places, before this is ever pointed at a real bucket:
+#   1. In transit: LITESTREAM_ENDPOINT must be https://, never http://. An
+#      empty endpoint (real AWS S3) is always https.
+#   2. At rest: either enable default (server-side) encryption on the bucket
+#      itself at the provider, or set LITESTREAM_SSE_KMS_KEY_ID above so every
+#      object Litestream uploads is encrypted with that KMS key. Do not ship
+#      app.db (user rows, profile data, vault *metadata*) or events.db to a
+#      bucket with neither of those in place.
+# The local fallback path (/data/litestream/*, used whenever
+# LITESTREAM_REPLICA_TYPE is unset) sits unencrypted at rest on the same
+# volume as the source databases, same as the databases themselves; that is
+# fine as a same-VM safety net but must never be the thing some other tool
+# syncs off-VM unencrypted on this file's behalf.
+
+dbs:
+  - path: /data/db/app.db
+    replica:
+      type: "${LITESTREAM_REPLICA_TYPE}"
+      path: /data/litestream/app
+      bucket: "${LITESTREAM_BUCKET}"
+      endpoint: "${LITESTREAM_ENDPOINT}"
+      region: "${LITESTREAM_REGION}"
+      access-key-id: "${LITESTREAM_ACCESS_KEY_ID}"
+      secret-access-key: "${LITESTREAM_SECRET_ACCESS_KEY}"
+      sse-kms-key-id: "${LITESTREAM_SSE_KMS_KEY_ID}"
+
+  - path: /data/db/events.db
+    replica:
+      type: "${LITESTREAM_REPLICA_TYPE}"
+      path: /data/litestream/events
+      bucket: "${LITESTREAM_BUCKET}"
+      endpoint: "${LITESTREAM_ENDPOINT}"
+      region: "${LITESTREAM_REGION}"
+      access-key-id: "${LITESTREAM_ACCESS_KEY_ID}"
+      secret-access-key: "${LITESTREAM_SECRET_ACCESS_KEY}"
+      sse-kms-key-id: "${LITESTREAM_SSE_KMS_KEY_ID}"
+
+  - path: /data/db/learn.db
+    replica:
+      type: "${LITESTREAM_REPLICA_TYPE}"
+      path: /data/litestream/learn
+      bucket: "${LITESTREAM_BUCKET}"
+      endpoint: "${LITESTREAM_ENDPOINT}"
+      region: "${LITESTREAM_REGION}"
+      access-key-id: "${LITESTREAM_ACCESS_KEY_ID}"
+      secret-access-key: "${LITESTREAM_SECRET_ACCESS_KEY}"
+      sse-kms-key-id: "${LITESTREAM_SSE_KMS_KEY_ID}"

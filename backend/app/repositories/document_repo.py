@@ -77,14 +77,70 @@ class DocumentRepo:
         )
         return dict(row) if row else None
 
-    async def set_status(self, document_id: int, status: str, error: str | None = None) -> None:
+    async def set_status(
+        self,
+        document_id: int,
+        status: str,
+        error: str | None = None,
+        *,
+        reason_en: str | None = None,
+        reason_bn: str | None = None,
+    ) -> None:
+        """`error` is kept for callers that only have one message; the
+        bilingual pair is what the interface actually renders (migration
+        013), so an English-only `error` is used as `reason_en` when no
+        pair was supplied rather than being dropped on the floor."""
         await self._db.execute(
-            "UPDATE documents SET status = ? WHERE id = ?", (status, document_id)
+            """UPDATE documents SET status = ?, failure_reason_en = ?, failure_reason_bn = ?
+               WHERE id = ?""",
+            (status, reason_en or error, reason_bn, document_id),
+        )
+
+    async def set_extraction_result(
+        self,
+        document_id: int,
+        *,
+        page_count: int | None,
+        issued_on: str | None,
+        expires_on: str | None,
+    ) -> None:
+        """Metadata the Gemma vision pass recovered from the document itself.
+
+        COALESCE, not assignment: a value the student typed in on upload is
+        never overwritten by one the model read off a scan.
+        """
+        await self._db.execute(
+            """UPDATE documents
+               SET status = 'extracted',
+                   failure_reason_en = NULL,
+                   failure_reason_bn = NULL,
+                   page_count = COALESCE(?, page_count),
+                   issued_on = COALESCE(issued_on, ?),
+                   expires_on = COALESCE(expires_on, ?)
+               WHERE id = ?""",
+            (page_count, issued_on, expires_on, document_id),
         )
 
     async def soft_delete(self, document_id: int) -> None:
         await self._db.execute(
             "UPDATE documents SET deleted_at = ? WHERE id = ?", (utc_now_iso(), document_id)
+        )
+
+    async def shred_keys(self, document_id: int) -> None:
+        """Destroy the per-document key material and every extracted field.
+
+        Deleting a vault document has to make the bytes unrecoverable, not
+        merely unlisted. The file on disk is overwritten and unlinked by the
+        vault service; this is the other half, and it is the half that
+        matters if a database backup outlives the volume: without
+        `wrapped_dek` there is no way back to the DEK, and every
+        `document_fields.value_enc` blob encrypted under that DEK becomes
+        undecryptable at the same instant. The columns are NOT NULL, so they
+        are set to a zero-length blob rather than NULL.
+        """
+        await self._db.execute("DELETE FROM document_fields WHERE document_id = ?", (document_id,))
+        await self._db.execute(
+            "UPDATE documents SET wrapped_dek = X'', nonce = X'' WHERE id = ?", (document_id,)
         )
 
     async def count_expiring_before(self, user_id: int, before_date: str) -> list[dict[str, Any]]:

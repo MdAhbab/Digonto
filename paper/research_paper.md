@@ -6,8 +6,12 @@
 > the same pass, so the title, the numbers, and the contribution count never fall
 > out of step.
 >
-> Body length: about 3,200 words, excluding abstract, figures, tables, and
-> references. 36 references, every DOI resolved and every URL fetched on
+> Body length: about 3,800 words, excluding abstract, figures, tables, and
+> references. Grew from an earlier 3,200-word draft when the verified test
+> results, the measured latency figures, the streaming-under-a-schema
+> mechanism, and the corrected agent-architecture description were added;
+> trimmed elsewhere to stay as close to 3,000 as the added, required content
+> allowed. 36 references, every DOI resolved and every URL fetched on
 > 26 July 2026.
 
 **Authors:** Author One, Author Two, Author Three
@@ -53,19 +57,22 @@ eligibility rules. The difficulty is that this material is written in dense
 administrative English, is spread across dozens of sites, and is edited without
 any announcement.
 
-That gap has produced a large intermediary market. Sector reporting counts about
-2,000 consultancy firms in Bangladesh, of which about 400 are registered with the
+That gap has produced a large intermediary market: about 2,000 consultancy
+firms operate in Bangladesh, of which only about 400 are registered with the
 Foreign Admission and Career Development Consultant Association of Bangladesh
-[3]. The rest operate on a general trade licence with no specialised supervision.
-Research on commission-based recruitment agents reports weak oversight and a
-structural conflict of interest, because the agent is paid by the institution
-while advising the student [6], [7]. Errors made by an agent then appear in the
-applicant's own file. One United States university found that about 65 percent of
-its applications from India and Bangladesh were likely fraudulent, and traced
-much of that to agent activity [5]. In 2024, Schengen states received 39,345 visa
-applications from Bangladesh and refused 20,957 of them, a refusal rate of 54.90
-percent, up from 42.8 percent one year earlier [4]. Every refusal also costs a
-non-refundable fee.
+[3], and the rest run on a general trade licence with no specialised
+supervision. Research on commission-based recruitment agents reports weak
+oversight and a structural conflict of interest, since the agent is paid by
+the institution while advising the student [6], [7], and an agent's errors
+then appear in the applicant's own file. One United States university found
+about 65 percent of its applications from India and Bangladesh likely
+fraudulent, much of it traced to agent activity [5]. In 2024, Schengen states
+received 39,345 visa applications from Bangladesh and refused 20,957 of them, a
+refusal rate of 54.90 percent, up from 42.8 percent one year earlier [4], and
+every refusal also costs a non-refundable fee. Figure 1 plots these application and refusal counts; the
+refusal rate shown there is the source's own reported percentage, not the ratio
+of the two bars, because the source computes it over a narrower category of
+decisions than the total application count.
 
 Digonto is built on one engineering claim. A small open language model on modest
 self-hosted hardware can now read official portals continuously and explain them
@@ -76,31 +83,34 @@ of 131,072 tokens, and native support for tool calling, images and audio [8]. It
 runs on one commodity virtual machine.
 
 The central difficulty is time. Visa rules change every week, so a fixed
-retrieval index becomes wrong. Fine-tuning alone is worse for this purpose,
-because facts stored in weights are costly to revise and earlier ability is lost
-in the process [21], [22]. Recent work measures exactly this contrast and shows
-that retrieval and parametric adaptation degrade in different ways when knowledge
-drifts continuously, meaning when the facts a system must report keep changing
-[27]. Neither method alone is sufficient.
+retrieval index becomes wrong, and fine-tuning alone is worse, because facts
+stored in weights are costly to revise and earlier ability is lost in the
+process [21], [22]. Recent work shows retrieval and parametric adaptation
+degrade differently as knowledge drifts continuously, meaning as the facts a
+system must report keep changing [27], so neither method alone is sufficient.
 
-Our response is Recurrent Continual Retrieval-Augmented Generation, RC-RAG. The
-design principle is a separation of duties by timescale. Facts that change daily
-are held in a versioned retrieval store that a scheduled crawl loop keeps
-current. Skills that improve slowly, such as explaining a bank solvency rule in
-plain Bangla, are held in the model weights and are revised monthly by
-parameter-efficient continual learning with rehearsal. Every generated claim
+Our response is Recurrent Continual Retrieval-Augmented Generation, RC-RAG,
+built on a separation of duties by timescale: facts that change daily are held
+in a versioned retrieval store a scheduled crawl loop keeps current, and skills
+that improve slowly, such as explaining a bank solvency rule in plain Bangla,
+are held in the model weights and revised monthly by parameter-efficient
+continual learning with rehearsal. Every generated claim
 cites a timestamped copy of its source.
 
-This paper makes five contributions. First, we specify RC-RAG, a three-loop
+This paper makes six contributions. First, we specify RC-RAG, a three-loop
 architecture that combines event-driven retrieval freshness with gated continual
 model improvement on a single small model. Second, we give an event-driven
 backend design that runs RC-RAG on one virtual machine with three explicit
-caching layers. Third, we describe seven autonomous agents built on Gemma 4 tool
-calling that turn the knowledge store into actions, including three that address
-what happens after a refusal, which is where the published failure rates
-concentrate. Fourth, we place a human reviewer at three specific points and argue
-for each: alert release, answer correction, and model promotion. Fifth, we give an
-evaluation protocol and state plainly what has not yet been measured.
+caching layers. Third, we describe seven autonomous agents built on Gemma 4
+schema-constrained generation that turn the knowledge store into actions,
+including three that address what happens after a refusal, which is where the
+published failure rates concentrate. Fourth, we show how streaming combines
+with schema-constrained generation so an answer appears token by token while
+its citations stay structurally guaranteed, and why a citation naming an
+unretrieved passage is always discarded. Fifth, we place a human reviewer at
+three specific points and argue for each: alert release, answer correction, and
+model promotion. Sixth, we give an evaluation protocol, report what live-model
+tests already verify, and state plainly what remains unmeasured.
 
 ## II. Background and Related Work
 
@@ -110,21 +120,21 @@ embeddings made this accurate [11], graph-based nearest neighbour indexes made i
 fast [14], [15], and the older lexical scoring function BM25 remains a strong
 complement to dense scores [12]. We combine the two rankings with reciprocal rank
 fusion, a method that merges ranked lists without tuning [13]. Later work taught
-models to judge their own retrieval and to abstain when evidence is missing [16].
-Digonto adopts abstention as a hard output rule rather than a preference. For a
-visa question, a confident wrong answer is worse than no answer, and generated
-text is known to assert unsupported facts [20].
+models to judge their own retrieval and abstain when evidence is missing [16];
+Digonto makes abstention a hard rule rather than a preference, because a
+confident wrong answer is worse than no answer on a visa question, and
+generated text is known to assert unsupported facts [20].
 
 **Continual learning.** A network trained on new data loses earlier ability, an
 effect named catastrophic interference [21]. Regularisation methods such as
 elastic weight consolidation protect parameters that mattered for earlier tasks
-[22]. Replay methods reuse earlier samples during new training [23], and two
-recent surveys organise the field and its evaluation protocols [24], [25]. Recent
-work schedules replay according to a model-centric measure of elapsed training
-rather than raw step counts [26]. Adapter methods change only small added
-matrices instead of full weights [28], and quantised training lowers the hardware
-needed to fit them [29]. Digonto assembles these known parts into a deployment
-loop: replay-mixed adapter training on real user corrections, promoted only
+[22], replay methods reuse earlier samples during new training [23], and two
+recent surveys organise the field and its evaluation protocols [24], [25].
+Recent work schedules replay by a model-centric measure of elapsed training
+rather than step counts [26]. Adapter methods change only small added matrices
+instead of full weights [28], and quantised training lowers the hardware needed
+to fit them [29]. Digonto assembles these known parts into a deployment loop:
+replay-mixed adapter training on real user corrections, promoted only
 through an automatic gate.
 
 **Agents and tools.** Interleaving reasoning with tool calls is now a standard
@@ -133,14 +143,14 @@ agent pattern [30], and models can be trained to decide when a tool is needed
 and call external tools uniformly, has become a common way to expose those tools,
 and its security properties are under active study [32]. Two risks matter for us.
 Retrieved web content can carry hidden instructions that override the model's
-own, which is indirect prompt injection [33]. Free-form output also breaks
+own, known as indirect prompt injection [33]. Free-form output also breaks
 machine consumers, so we constrain generation to a schema [34].
 
 **Small models and Bangla.** Recent analysis argues that small language models
 are sufficient for most agent work, because agent subtasks are narrow and
-repetitive [9]. This matters twice for us. Self-hosting keeps student passports
-and bank statements inside our own deployment. It also makes the marginal cost of
-an answer close to the electricity cost of the machine, which is what makes a
+repetitive [9]. This matters twice: self-hosting keeps student passports and
+bank statements inside our own deployment, and it keeps the marginal cost of an
+answer close to the electricity cost of the machine, which is what makes a
 permanently free service possible. Bangla remains under-served in language
 technology despite its speaker count, and dedicated Bangla pretraining and large
 multilingual translation efforts have both been needed to close part of that gap
@@ -189,17 +199,28 @@ mirror, a citation list, a confidence value, and an optional refusal reason. If
 no retrieved passage supports an answer, the schema requires a refusal. Refusal
 is a designed result, not an error.
 
+**Streaming under a schema.** The interface shows words as they are produced,
+so tokens must reach the client before the model finishes speaking, which
+rules out waiting for the whole schema-constrained object to close. Instead the
+model streams the object with the schema enforced throughout, and the answer
+field is decoded directly out of the still-growing, incomplete JSON text, so
+the first word appears as soon as it is written. Citations are read only once
+the object fully parses, because a half-parsed citation, naming the wrong
+snapshot or truncating a quoted span, is worse than none. For the same reason,
+a citation naming a snapshot the retrieval step never returned is discarded
+rather than shown, which is what keeps the Truth Ledger guarantee, that every
+citation resolves to a passage actually retrieved, true without exception.
+
 **Recurrent loop.** Crawl workers re-fetch each registered portal on its own
 schedule, from six hours for embassy pages to daily for scholarship boards. An
-unchanged page is detected by content hash and costs nothing further. A changed
-page is diffed at passage level, and only changed passages are re-embedded, which
-keeps the update cost proportional to the change rather than to the corpus. The
-store is versioned. A new version is published atomically by switching a
-collection alias, and earlier versions are kept for ninety days. Every citation
-names the exact stored copy it came from, so a student, a bank officer, or a
-reviewer can check any claim against the archived page. The application publishes
-this archive as the Truth Ledger, meaning a public record that links each claim
-to the stored page that supports it.
+unchanged page, detected by content hash, costs nothing further; a changed page
+is diffed at passage level, and only changed passages are re-embedded, keeping
+the update cost proportional to the change rather than to the corpus. The store
+is versioned: a new version publishes atomically by switching a collection
+alias, and earlier versions are kept for ninety days, so a student, a bank
+officer, or a reviewer can check any claim against the archived page. The
+application publishes this archive as the Truth Ledger, meaning a public
+record that links each claim to the stored page that supports it.
 
 **Continual loop.** Three kinds of experience accumulate in a replay buffer:
 questions the system refused, answers a reviewer corrected, and answers that were
@@ -210,11 +231,12 @@ and a rank 16 adapter is trained with quantised fine-tuning [28], [29]. The
 rehearsal mixture is the defence against forgetting [23]. Promotion is gated
 twice. The automatic gate requires the candidate to match or exceed the current
 model on a frozen 200-question benchmark, with no single metric falling by more
-than one point. A candidate that clears it then waits for a human reviewer. The
-two gates catch different failures: the benchmark catches regressions it was built
-to measure, and the reviewer catches the ones it was not, such as a fluent answer
-that adopts the wrong register for a first-time applicant. Promotion and rollback
-are recorded as single events, and the previous model tag is always retained.
+than one point, and a candidate that clears it then waits for a human reviewer.
+The two gates catch different failures: the benchmark catches regressions it
+was built to measure, and the reviewer catches the ones it was not, such as a
+fluent answer that adopts the wrong register for a first-time applicant.
+Promotion and rollback are single recorded events, and the previous model tag
+is always retained, so reverting takes one operation, not a retraining cycle.
 
 ## IV. System Design
 
@@ -223,32 +245,34 @@ served model. Every state change emits an event to a durable stream, and workers
 consume events idempotently, meaning repeated delivery of the same event cannot
 corrupt state. Request handlers stay small: they validate, emit, and reply.
 
-One case shows why this structure was chosen. A single portal change updates the
+A single portal change traces why this structure was chosen: it updates the
 knowledge store, invalidates the affected semantic cache entries, re-plans the
 schedule of every student who depends on that portal, and sends a Bangla alert
-quoting the changed sentence. None of that work belongs inside an HTTP request.
+quoting the changed sentence, none of which belongs inside an HTTP request.
 
-**Caching.** Three layers control cost and latency. Ordinary HTTP caching covers
-static assets and archived page reads. The semantic cache serves repeated
-questions without recomputation, and visa questions repeat often because
-applicants share a small set of concerns. The model is kept resident with a
-stable prompt prefix, so the shared instructions and tool definitions are encoded
-once rather than on every request.
+**Caching.** Three layers control cost and latency: ordinary HTTP caching for
+static assets and archived page reads, a semantic cache that serves repeated
+questions without recomputation, since visa questions repeat often because
+applicants share a small set of concerns, and a model kept resident with a
+stable prompt prefix, so the shared instructions and tool definitions are
+encoded once rather than on every request.
 
-**Agents.** Seven agents run on Gemma 4 tool calling against internal functions
-and three custom Model Context Protocol servers [32], following the standard
-pattern of alternating reasoning and tool use [30]. Porter watches portal-change
+**Agents.** Each of the seven agents asks Gemma 4 for one schema-constrained
+structured reply, the same mechanism the fast loop uses, with one automatic
+repair attempt if a reply fails to validate. Porter watches portal-change
 events, classifies each change into an enumerated type, discards wording-only
 edits, and alerts affected students with the changed passage quoted and cited.
-Prohori audits a student's uploaded documents against the cited checklist of each
-target institution and reports missing items, documents expiring before the
-projected travel date, and fields that disagree across documents, such as a name
-spelled differently from the passport. Khoji matches the student profile against
-a funding index and returns a ranked list in which every rank carries a
-per-criterion reason, plus a complete budget including the bank balance the
-embassy actually requires. Shonchari runs mock visa interviews conditioned on the
-student's own file and reports contradictions between spoken answers and
-submitted documents, because consistency is what a visa officer checks.
+Prohori audits a student's uploaded documents against the cited checklist of
+each target institution and reports missing items, documents expiring before
+the projected travel date, and fields that disagree across documents, such as a
+name spelled differently from the passport, found by deterministic checks a
+reviewer can reproduce and explained in Bangla by the model. Khoji matches the
+student profile against a funding index and returns a ranked list in which
+every rank carries a per-criterion reason, plus a complete budget including the
+bank balance the embassy actually requires. Shonchari runs mock visa interviews
+conditioned on the student's own file and reports contradictions between
+spoken answers and submitted documents, because consistency is what a visa
+officer checks.
 
 Three further agents address failures that occur after a first attempt, which is
 where the published refusal statistics concentrate. Bicharok reads a refusal
@@ -262,19 +286,50 @@ passages too vague to help. Dalil reads a consultancy contract and reports claus
 by clause which terms are ordinary and which transfer risk onto the student, with
 a fair alternative for each.
 
-Three controls bound agent behaviour. Each agent is limited to eight tool steps.
-Each agent holds a tool allow-list enforced by the runtime rather than by the
-prompt, and no agent has any deletion tool. Every tool call is written to an
-audit table with its inputs, an output hash, and latency. Retrieved portal text
-is treated as untrusted input and is wrapped in a data-only frame, and tool
-calling is disabled during grounded answering, which limits indirect prompt
-injection [33].
+Two controls bound every agent regardless of task: no agent exposes a deletion
+tool, and retrieved portal text is treated as untrusted input, wrapped in a
+data-only frame, with tool calling disabled during grounded answering, which
+limits indirect prompt injection [33]. These seven calls do not use the
+model's separate native tool-calling capability, confirmed against the live
+model with an enumerated argument; that capability is instead exposed through
+three custom Model Context Protocol servers [32], letting any external MCP
+client call the same repositories and services the product itself uses. An
+audited, multi-step tool-calling runtime with a per-call step limit is defined
+in the event schema but not yet wired to the agents: today each call is a
+single schema-constrained request, not an interleaved reasoning-and-acting loop
+[30].
 
 ## V. Evaluation Design
 
-The system is at design and prototype stage. Every number in this section is a
-protocol definition or a target, not a result. We state this so no reader
-mistakes a plan for a measurement.
+The system is at prototype stage. This section separates what is already
+verified against the live model from what remains a protocol definition or a
+target, so that no reader mistakes a plan for a measurement, and no measurement
+is mistaken for a target either.
+
+**Verified today.** Five contract tests and fifteen agent tests run against the
+live model, and all twenty pass as of 26 July 2026. The contract tests confirm
+the served model reports tool calling, vision, and thinking as capabilities;
+emits a native tool call with a valid enumerated argument; refuses when no
+passage is given, the single most load-bearing behaviour in the product, rather
+than inventing a figure; cites the exact snapshot when a passage is given; and
+stays fast on a warm call. The agent tests confirm, among other things, that
+Prohori's deterministic checks reproduce identically on repeated input, that
+Porter's confidence threshold routes a low-confidence change to review rather
+than to students, that every Khoji score carries a reason, that Shonchari's
+overall score is the arithmetic mean of its per-turn scores rather than a model
+opinion, and that a request carrying document content is refused before it can
+reach the remote fallback path.
+
+Figure 5 reports the latency these tests measured on the development machine:
+24.3 seconds to cold-load the model (the first call after it has been evicted
+from memory), 1.16 seconds for a warm tool call at 46 tokens per second, 1.91
+seconds for a warm refusal, and 5.13 seconds for a warm grounded answer with a
+citation. These are single runs on the development machine, not the production
+virtual machine, reported to show the model behaves as the design assumes
+rather than as a claim about production latency.
+
+**Still a plan.** The rest of this section, including Table II below, is a
+protocol definition or a target, not a result.
 
 **Benchmark.** We are building a 200-question Bangla benchmark covering five
 destination countries and four question families: document requirements,
@@ -289,8 +344,8 @@ lacks support. Bangla clarity is scored on a five-point rubric by native
 speakers. Latency is reported as median and 95th percentile on the production
 machine, with and without the semantic cache. Automated retrieval scoring follows
 established RAG evaluation practice as a cheap regression check between human
-rounds [19]. For the continual loop we report benchmark scores before and after
-every promotion, which measures forgetting directly.
+rounds [19], and for the continual loop we report benchmark scores before and
+after every promotion to measure forgetting directly.
 
 **Table II. Design targets. None of these is a measured result**
 
@@ -310,50 +365,61 @@ the learning system and not only a test of it.
 ## VI. Responsibility and Sustainability
 
 Digonto reports what official sources state, with citations, and does not give
-legal or immigration advice. The interface says so directly. Where sources
-conflict or are silent, the system reports that instead of choosing. For
-visa-critical questions an invented answer can cost a family a year and a large
-sum of money, so abstention is an ethical control as much as a technical one. The
-interview agent coaches truthful presentation only and refuses requests to help
-misrepresent facts, with an explanation of the legal consequences.
+legal or immigration advice, and the interface says so directly. Where sources
+conflict or are silent, the system reports that instead of choosing, because on
+a visa-critical question an invented answer can cost a family a year and a
+large sum of money, so abstention is an ethical control as much as a technical
+one. The interview agent coaches truthful presentation only and refuses
+requests to help misrepresent facts, explaining the legal consequences.
 
 Inference is self-hosted, so passports and bank statements never leave the
-deployment. Stored documents are encrypted at rest with per-user keys. The replay
-buffer holds no document contents, and text entering it passes an automated
-removal step for names and identifying numbers. Students can export or
-permanently delete their data.
+deployment, and stored documents are encrypted at rest with per-user keys. The
+replay buffer holds no document contents, and text entering it passes an
+automated removal step for names and identifying numbers. Students can export
+or permanently delete their data.
 
-The interface is Bangla-first and accepts voice input for users who prefer
-speaking to typing. A second role, the reviewer, holds the parts of the system
-that should not be automated: a low-confidence portal change is not sent to any
-student until a reviewer confirms the category, a corrected answer is recorded by
-a reviewer rather than inferred from a negative rating, and no adapter reaches
-students on the automatic gate alone. The reviewer role carries no decryption
-capability and cannot read document contents, and every reviewer access to
-student-linked data is logged and shown to that student. The service
-addresses Sustainable Development Goal 4 on equitable access to higher education,
-and Goal 10, target 10.7, on orderly and responsible migration. It is free for
-students permanently. Operating cost stays near the cost of one virtual machine,
-because the model is small and the caching design absorbs repetition, and
-institutional revenue rather than student fees funds the service.
+The interface is Bangla-first throughout. Voice input is planned, using the
+model's native audio capability, but is not available today: the interview
+room accepts typed answers only, because no speech-to-text service is deployed
+alongside the model yet. Every generated claim is delivered in both Bangla and
+English, so a student can check an official English phrase against the
+explanation without leaving the page.
+
+A second role, the reviewer, holds the parts of the system that should not be
+automated. A portal change classified below a confidence threshold is not sent
+to any student until a reviewer confirms the category, because a false alert
+that a deadline moved is worse than a late one. A corrected answer is recorded
+by a reviewer rather than inferred from a negative rating, and that correction
+is the highest-value item in the replay buffer; no adapter reaches students on
+the automatic gate alone. The reviewer role carries no decryption capability
+and cannot read document contents, and every reviewer access to student-linked
+data is logged and shown to that student.
+
+The service addresses Sustainable Development Goal 4 on equitable access to
+higher education, and Goal 10, target 10.7, on orderly and responsible
+migration. It is free for students permanently, at an operating cost near one
+virtual machine, because the model is small and repeated questions are served
+from cache, and institutional revenue rather than student fees funds the
+service.
 
 ## VII. Limitations
 
-Five limitations are worth stating before a reviewer states them. First, no
-quantitative results exist yet, and Section V defines protocol rather than
-findings. Second, the forgetting defence is rehearsal plus two gates, and the
-automatic gate is only as reliable as the frozen benchmark, so leakage of
-benchmark items into training data must be audited every cycle. The human gate has
-its own limit: it does not scale, and a reviewer under time pressure approves. We
-report reviewer decision counts and time spent alongside the benchmark scores
-rather than presenting human oversight as free. Third, crawling depends on portal
-stability, and a redesign can break a parser silently. The system reports source
-silence instead of guessing, but silence is still a degraded state. Fourth,
-Bangla clarity rubrics carry rater subjectivity, which two raters and
-adjudication reduce but do not remove. Fifth, a model with 2.3 billion effective
-parameters is limited when reasoning across many documents at once. The design
-compensates with retrieval quality and schema-constrained output, and that limit
-will itself be measured in the pilot.
+Five limitations are worth stating before a reviewer states them. First, the
+verified results in Section V are contract and agent tests on a development
+machine, not a benchmark or a field result; the benchmark and the pilot remain
+protocol, not findings. Second, the forgetting defence is rehearsal plus two
+gates, and the automatic gate is only as reliable as the frozen benchmark, so
+leakage of benchmark items into training data must be audited every cycle; the
+human gate does not scale, and a reviewer under time pressure approves, so we
+report reviewer decision counts and time spent alongside benchmark scores
+rather than treat human oversight as free. Third, crawling depends on portal
+stability, and a redesign can break a parser silently; the system reports
+source silence instead of guessing, but silence is still a degraded state.
+Fourth, Bangla clarity rubrics carry rater subjectivity, which two raters and
+adjudication reduce but do not remove. Fifth, a model with 2.3 billion
+effective parameters is limited when reasoning across many documents at once;
+retrieval quality and schema-constrained output compensate, and that limit will
+itself be measured in the pilot.
 
 ## VIII. Conclusion and Future Work
 
@@ -368,14 +434,13 @@ reversible.
 Three directions follow. The first is measurement: run the benchmark and the
 pilot, and replace every target in this paper with a measured value. The second
 is learning: compare rehearsal alone against rehearsal combined with elastic
-weight consolidation [22] on the promotion benchmark, and test whether model-time
-replay scheduling [26] improves refusal stability across long adapter chains. The
-third is scope: extend the crawl index to more destination countries and to
-regional dialect output, and evaluate the larger E4B variant for the agent
-runtime, where correct tool-call formatting matters more than latency [8], [9].
-The design generalises to any setting where official information is public,
-changes often, and is written in a language that excludes the people who depend
-on it.
+weight consolidation [22], and test whether model-time replay scheduling [26]
+improves refusal stability across long adapter chains. The third is scope: more
+destination countries, regional dialect output, and wiring the agents to the
+model's native tool-calling capability behind the audited runtime this paper
+defines but does not yet use [8], [9]. The design generalises to any setting
+where official information is public, changes often, and is written in a
+language that excludes the people who depend on it.
 
 ## Data and Code Availability
 
@@ -471,7 +536,26 @@ page on 26 July 2026. The authoritative BibTeX is `docs/paper/references.bib`.
 
 ## Figure plan (project figure specification)
 
-- **Fig. 1.** RC-RAG three-loop architecture, schematic, 7.16 in double column. Blue #2563EB for the fast loop, orange #E8710A for the recurrent loop, green #059669 for the continual loop, grey #6B7280 for storage. Caption marks it as schematic. Drawn in TikZ inside the LaTeX.
-- **Fig. 2.** Adapter promotion protocol: buffer, rehearsal mix, training, gate, promote or roll back. Single column, 3.5 in. TikZ.
-- **Fig. 3.** Delivery of one `portal.changed` event to four consumers. Single column. TikZ.
-- **Fig. 4.** *(After measurement only.)* Benchmark scores before and after each adapter promotion. This one must be generated by script from the raw result files, with error bars over three seeds, and the caption must state seeds and units. It is deliberately absent until the data exists.
+- **Fig. 1.** Schengen visa applications and refusals from Bangladesh, 2023
+  and 2024, reproduced from SchengenVisaInfo. PNG, generated by script,
+  single column. Caption states the refusal rate is the source's own reported
+  percentage, not the ratio of the two bars shown, and that the figure is
+  reproduced from the cited source, not independently measured.
+- **Fig. 2.** RC-RAG three-loop architecture, schematic, 7.16 in double column. Blue #2563EB for the fast loop, orange #E8710A for the recurrent loop, green #059669 for the continual loop, grey #6B7280 for storage. Caption marks it as schematic. Drawn in TikZ inside the LaTeX.
+- **Fig. 3.** Adapter promotion protocol: buffer, rehearsal mix, training, gate, promote or roll back. Single column, 3.5 in. TikZ.
+- **Fig. 4.** Delivery of one `portal.changed` event to four consumers. Single column. TikZ.
+- **Fig. 5.** Measured response latency on the development machine, log scale:
+  cold model load, warm tool call, warm refusal, warm grounded answer. PNG,
+  generated by script from the same numbers `backend/tests/test_model_contracts.py`
+  records. The one figure in the paper built from a real measurement rather
+  than a target. Caption states these are single runs, not the production
+  virtual machine.
+
+A sixth figure, mapping each agent to the Gemma capability it uses, was
+prepared but is deliberately not included: its "Tools" and "Audio" columns
+would repeat the tool-calling and voice-input claims this revision corrects
+(no agent currently uses native tool calling, and Shonchari's voice mode is
+not implemented, since no speech-to-text service is deployed). Adding it
+would contradict Sections IV and VI. A seventh figure, benchmark scores
+before and after each adapter promotion, remains absent until that data
+exists, per the original plan.

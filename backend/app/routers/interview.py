@@ -10,18 +10,21 @@ header when the client can set one, and falling back to a `?token=` query
 parameter, since most browser `WebSocket` clients cannot set custom headers
 on the handshake request.
 
-Voice mode is only partially implemented: `audio_start`/`audio_end` framing
-is accepted, but no speech-to-text service exists anywhere in this codebase
-(no such repository, service, or agent was provided), so this cannot
-produce a real `transcript.partial`/`transcript.final` pair without
-fabricating text the student never said. Rather than invent a transcript,
-the socket replies with a `WsErrorMessage` when audio framing arrives and
-continues to serve the fully real `answer_text` path. Listed in the final
-report.
+Voice mode runs on the same local model as everything else, through
+`app/services/speech.py` (see that module for how audio actually reaches
+Gemma 4 E2B and how that was established). The framing is:
+`audio_start` -> binary frames -> `audio_end`. Frames are buffered, a real
+prefix of the recording is transcribed while the student is still speaking
+to produce `transcript.partial`, and `audio_end` produces
+`transcript.final`, whose text is then handed to
+`InterviewService.submit_answer` exactly as a typed `answer_text` would be.
+Nothing here ever synthesises words: if the recording cannot be
+transcribed, the socket says so bilingually and the student types instead.
 """
 
 from __future__ import annotations
 
+import time
 from typing import Any, Mapping
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, status
@@ -42,6 +45,8 @@ from app.models.interview import (
     SessionCreateResponse,
     SessionOut,
     SessionCompleteMessage,
+    TranscriptFinal,
+    TranscriptPartial,
     WsErrorMessage,
 )
 from app.repositories.budget_repo import BudgetRepo
@@ -52,6 +57,7 @@ from app.repositories.target_repo import TargetRepo
 from app.repositories.user_repo import UserRepo
 from app.security.tokens import TokenExpired, TokenInvalid, decode_access_token
 from app.services.interview_service import InterviewService
+from app.services.speech import transcribe, wav_prefix
 
 router = APIRouter(
     prefix="/interview",
@@ -156,6 +162,47 @@ async def _authenticate_ws(websocket: WebSocket, dbs: Databases) -> Mapping[str,
 # single-writer-per-file design for the same assumption elsewhere), so a
 # module-level set is the proportionate implementation.
 _active_ws_users: set[int] = set()
+
+# Voice framing limits. 8 MB of 16 kHz mono 16-bit PCM is about four minutes,
+# comfortably longer than any interview answer and short enough that a client
+# that forgets to send `audio_end` cannot grow the buffer without bound.
+_MAX_UTTERANCE_BYTES = 8 * 1024 * 1024
+# A partial costs one model call, so partials are spent where they help: on a
+# long answer, a few times, never on a two-second one.
+_PARTIAL_MIN_NEW_BYTES = 96 * 1024  # ~3 s at 16 kHz mono 16-bit
+_PARTIAL_MIN_INTERVAL_S = 4.0
+_PARTIAL_MAX_PER_UTTERANCE = 4
+
+
+async def _send_answer_result(
+    websocket: WebSocket,
+    interview: InterviewService,
+    user_id: int,
+    session: dict[str, Any],
+    session_id: str,
+    answer_text: str,
+) -> dict[str, Any] | None:
+    """Score one answer and send the reply sequence.
+
+    Returns the refreshed session, or None when the session finished and the
+    socket should close. Shared by the typed and the spoken path so a spoken
+    answer is treated as exactly what it is: the same answer, entered
+    differently.
+    """
+    await websocket.send_json(PhaseMessage(phase="thinking").model_dump(by_alias=True))
+    result = await interview.submit_answer(user_id, session, answer_text)
+    if result["kind"] == "complete":
+        await websocket.send_json(
+            SessionCompleteMessage(report_id=result["report_id"]).model_dump(by_alias=True)
+        )
+        return None
+    await websocket.send_json(ScoreMessage(**result["score"]).model_dump(by_alias=True))
+    await websocket.send_json(PhaseMessage(phase="speaking").model_dump(by_alias=True))
+    await websocket.send_json(QuestionMessage(**result["question"]).model_dump(by_alias=True))
+    await websocket.send_json(PhaseMessage(phase="listening").model_dump(by_alias=True))
+    # submit_answer records against the *last* turn in the session; re-read so
+    # the next answer scores against the newly added turn.
+    return await interview.get_session(user_id, session_id)
 
 
 @ws_router.websocket("/sessions/{session_id}/ws")

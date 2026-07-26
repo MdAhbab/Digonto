@@ -156,15 +156,19 @@ class PlanRepo:
     async def list_changes(
         self, plan_id: int, *, since: str | None, cursor: str | None, limit: int = 20
     ) -> tuple[list[dict[str, Any]], str | None]:
-        clauses = ["plan_id = ?"]
+        # Every column here is qualified with the `pc.` alias on purpose:
+        # plan_steps carries plan_id, created_at and id too, so an unqualified
+        # name in the WHERE clause is ambiguous once the LEFT JOIN is applied
+        # and SQLite rejects the whole statement.
+        clauses = ["pc.plan_id = ?"]
         params: list[Any] = [plan_id]
         if since:
-            clauses.append("created_at >= ?")
+            clauses.append("pc.created_at >= ?")
             params.append(since)
         decoded = decode_cursor(cursor)
         if decoded:
             created_at, row_id = decoded
-            clauses.append("(created_at, id) < (?, ?)")
+            clauses.append("(pc.created_at, pc.id) < (?, ?)")
             params.extend([created_at, row_id])
         where = f"WHERE {' AND '.join(clauses)}"
         rows = await self._db.fetch_all(

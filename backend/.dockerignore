@@ -1,0 +1,36 @@
+# Keep the build context small and keep anything sensitive or irrelevant to
+# the running container out of the image entirely, not merely uncopied.
+
+# Local virtualenv and bytecode: the image builds its own venv (see
+# Dockerfile); shipping the host's .venv would also bake in the wrong
+# platform's compiled extensions.
+.venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+
+# Tests are not part of the runtime image.
+tests
+
+# Local data: SQLite files, vault blobs, snapshot archives. These live on the
+# `appdata` volume in production (see docker-compose.prod.yml), never in the
+# image.
+data
+
+# Secrets. Real values are injected via docker-compose's env_file at run
+# time, never baked into a layer.
+.env
+.env.*
+!.env.example
+
+# Untracked, deliberately not for public distribution (see its own header).
+backend.internal.md
+
+# VCS and editor noise.
+.git
+.gitignore
+.DS_Store

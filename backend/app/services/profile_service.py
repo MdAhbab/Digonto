@@ -36,9 +36,11 @@ class ProfileService:
 
     # -- destinations and shortlist -----------------------------------------
 
-    async def list_destinations(self, user_id: int) -> list[dict]:
+    async def list_destinations(self, user_id: int | None) -> list[dict]:
+        # user_id is None for a signed-out visitor: the catalogue is public,
+        # so it still renders, with nothing marked shortlisted.
         countries = await self._profiles.list_countries()
-        shortlist = await self._profiles.get_shortlist(user_id)
+        shortlist = await self._profiles.get_shortlist(user_id) if user_id else set()
         out = []
         for c in countries:
             row = dict(c)

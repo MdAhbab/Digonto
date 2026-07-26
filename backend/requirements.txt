@@ -27,6 +27,13 @@ httpx==0.28.1
 selectolax==0.3.27
 tenacity==9.0.0
 
+# Documents. pypdfium2 ships a self-contained pdfium wheel for every platform
+# we deploy on, so rasterising page 1 of a PDF needs no system package (no
+# poppler, no ghostscript). The vault service needs it because the vision
+# agents (Bicharok, Dalil) and the Gemma field extraction all take an image,
+# never a PDF.
+pypdfium2==5.12.1
+
 # Text
 rank-bm25==0.2.2
 python-ulid==3.0.0
@@ -35,6 +42,14 @@ regex==2024.11.6
 # Observability
 prometheus-client==0.21.1
 structlog==24.4.0
+
+# MCP servers (app/mcp/). Pinned to 1.12.4 specifically: newer mcp releases
+# pull in an sse-starlette that in turn drags starlette to 1.x, which breaks
+# fastapi==0.115.6's own starlette<0.42 pin. 1.12.4 is the newest version
+# whose declared dependency floors (pydantic>=2.8, starlette>=0.27,
+# uvicorn>=0.23.1, httpx>=0.27) are already satisfied by the pins above, so
+# installing it changes nothing else in this file.
+mcp==1.12.4
 
 # Dev
 pytest==8.3.4

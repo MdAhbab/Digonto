@@ -33,29 +33,45 @@ def get_profile_service(dbs: Databases = Depends(get_dbs), bus: EventBus = Depen
     return ProfileService(ProfileRepo(dbs.app, dbs.events), TargetRepo(dbs.app), bus)
 
 
+def destination_from_row(row: Mapping[str, Any]) -> DestinationOut:
+    """Map one `countries` row onto the shape the destinations globe reads.
+
+    lat, lng, note_en and note_bn arrive from migration 014, which carries
+    capital-city coordinates and a non-advisory one-line note per country.
+    `citation` stays None on purpose: nothing in this row is a claim about
+    policy, so there is no snapshot to point at. Anything that is such a
+    claim reaches the client through the ask or ledger surfaces instead,
+    where a citation is mandatory.
+    """
+    visa_types = row.get("visa_types")
+    if isinstance(visa_types, str):
+        visa_types = json.loads(visa_types)
+
+    return DestinationOut(
+        id=row["code"],
+        name_en=row["name_en"],
+        name_bn=row["name_bn"],
+        lat=row["lat"],
+        lng=row["lng"],
+        note_en=row["note_en"],
+        note_bn=row["note_bn"],
+        visa_types=list(visa_types or []),
+        shortlisted=bool(row.get("shortlisted", False)),
+        citation=None,
+    )
+
+
 @router.get("/destinations", response_model=Page[DestinationOut])
 async def list_destinations(
     user: Mapping | None = Depends(get_optional_user),
     profiles: ProfileService = Depends(get_profile_service),
 ) -> Page[DestinationOut]:
-    # `countries` (docs/database.md section 3.2) has only code/name_en/
-    # name_bn/visa_types/active/sort_order: no lat, lng, note_en, note_bn,
-    # or citation columns, and the seed migration
-    # (app/db/migrations/app/011_seed_countries.sql) does not add any either.
-    # `DestinationOut` requires lat/lng/note_en/note_bn as non-optional
-    # fields, per the frontend `Country` interface. Populating them would
-    # mean inventing coordinates and citable prose, which "no mock or
-    # placeholder data anywhere" rules out, and adding the columns is a
-    # migration, out of scope for a router-only build. Raising here (rather
-    # than returning fabricated geography) is deliberate; see the final
-    # report for what a real fix needs (a migration adding those columns,
-    # seeded from a real source, each with its own snapshot citation).
-    raise NotImplementedError(
-        "GET /destinations needs DestinationOut.{lat,lng,note_en,note_bn}, which "
-        "have no backing column on `countries` (docs/database.md section 3.2). "
-        "ProfileService.list_destinations() only returns "
-        "{code,name_en,name_bn,visa_types,active,sort_order,shortlisted}."
-    )
+    # Public endpoint. A signed-out visitor still sees the catalogue; they
+    # just see every country as un-shortlisted, because a shortlist belongs
+    # to an account.
+    rows = await profiles.list_destinations(user["id"] if user else None)
+    items = [destination_from_row(r) for r in rows]
+    return Page(items=items, next_cursor=None, total=len(items))
 
 
 @router.get("/programmes", response_model=Page[ProgrammeOut])

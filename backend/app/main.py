@@ -27,10 +27,10 @@ from ulid import ULID
 from app.config import get_settings
 from app.db.connection import Databases
 from app.db.migrate import run_migrations
+from app.db.seed_demo import seed_demo
 from app.errors import Forbidden, install_exception_handlers
 from app.events.bus import EventBus
 from app.llm.router import ModelRouter
-from app.security.passwords import hash_password
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -41,51 +41,6 @@ REQUEST_COUNT = Counter(
 REQUEST_LATENCY = Histogram(
     "http_request_duration_seconds", "HTTP request latency", ["method", "path"]
 )
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-async def _seed_demo_accounts(dbs: Databases) -> None:
-    """Create the judge and moderator accounts, idempotently.
-
-    Only the accounts themselves: docs/api_contract.md section 3.1 describes
-    the judge account as "a fully populated student" with targets, documents,
-    a plan, and a completed interview, but populating that realistic scenario
-    means writing rows through the profile/vault/planner/interview services
-    that another work stream owns. Creating them here would either duplicate
-    that logic or invent schema shortcuts. Scope for this factory is the two
-    user rows, both flagged is_demo=1 so they can be excluded from stats and
-    wiped in one command; a follow-up seed script (or the owning services'
-    fixtures) is the right place for the rest.
-    """
-    settings = get_settings()
-    if settings.is_production or not settings.seed_demo_data:
-        return
-
-    now = _now_iso()
-    accounts = (
-        (settings.seed_judge_email, settings.seed_judge_password, "student", "Judge"),
-        (settings.seed_moderator_email, settings.seed_moderator_password, "moderator", "Moderator"),
-    )
-    for email, password, role, display_name in accounts:
-        if not email or not password:
-            log.warning("skipping seed account email=%s: SEED_* password not configured", email)
-            continue
-        existing = await dbs.app.fetch_val("SELECT id FROM users WHERE email = ?", (email,))
-        if existing:
-            continue
-        await dbs.app.execute(
-            """
-            INSERT INTO users
-                (public_id, email, password_hash, display_name, role, status,
-                 email_verified, is_demo, created_at)
-            VALUES (?, ?, ?, ?, ?, 'active', 1, 1, ?)
-            """,
-            (str(ULID()), email, hash_password(password), display_name, role, now),
-        )
-        log.info("seeded demo account role=%s email=%s", role, email)
 
 
 @asynccontextmanager
@@ -112,7 +67,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.http_client = http_client
     app.state.started_at = time.monotonic()
 
-    await _seed_demo_accounts(dbs)
+    await seed_demo(dbs, settings)
 
     log.info("digonto backend ready env=%s", settings.app_env)
     try:

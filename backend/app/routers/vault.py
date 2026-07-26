@@ -32,18 +32,29 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import time
+from collections.abc import Iterator
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Mapping
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import StreamingResponse
 
 from app.config import get_settings
 from app.db.connection import Databases
 from app.deps import RateLimit, get_bus, get_current_user, get_dbs, get_router
-from app.errors import Unauthorized
+from app.errors import NotFound, Unauthorized
 from app.events.bus import EventBus
 from app.llm.router import ModelRouter
 from app.models.common import Page, SnapshotCitation
@@ -73,8 +84,9 @@ from app.repositories.profile_repo import ProfileRepo
 from app.repositories.snapshot_repo import SnapshotRepo
 from app.repositories.target_repo import TargetRepo
 from app.routers._sse import SSE_HEADERS, format_sse, sse_comment
-from app.security.vault_crypto import decrypt_file
 from app.services.vault_service import VaultService
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(
     tags=["vault"],
@@ -155,6 +167,28 @@ async def _citation_from_snapshot_id(
 # --- documents --------------------------------------------------------
 
 
+_UPLOAD_CHUNK = 64 * 1024
+
+
+async def _read_within_limit(file: UploadFile, vault: VaultService) -> bytes:
+    """Read the multipart part, refusing at the limit instead of after it.
+
+    `await file.read()` with no argument buffers whatever was sent before
+    anyone asks how big it is; Starlette spools past 1 MB to a temporary file,
+    so a 2 GB upload becomes 2 GB of disk before the size check ever runs.
+    Reading in chunks and raising the moment the total crosses the limit means
+    the connection is closed with a 413 while the rest is still in flight.
+    """
+    buffer = bytearray()
+    while True:
+        chunk = await file.read(_UPLOAD_CHUNK)
+        if not chunk:
+            break
+        buffer += chunk
+        vault.check_size(len(buffer))
+    return bytes(buffer)
+
+
 @router.post(
     "/vault/documents",
     response_model=DocumentOut,
@@ -162,29 +196,53 @@ async def _citation_from_snapshot_id(
     dependencies=[Depends(RateLimit("vault_upload_daily", limit=20, window_s=86400))],
 )
 async def upload_document(
+    background: BackgroundTasks,
     file: UploadFile = File(...),
     kind: str = Form(...),
     expires_on: str | None = Form(default=None),
     user: Mapping = Depends(get_current_user),
     vault: VaultService = Depends(get_vault_service),
 ) -> DocumentOut:
-    data = await file.read()
+    data = await _read_within_limit(file, vault)
     doc = await vault.upload_document(
         user_id=user["id"],
         user_public_id=user["public_id"],
         kind=kind,
         filename=file.filename or "upload",
-        mime_type=file.content_type or "application/octet-stream",
+        mime_type=file.content_type or "",
         data=data,
         expires_on=expires_on,
     )
+
+    # 202, not 201: the row exists and the bytes are encrypted on disk, but the
+    # vision pass that fills `document_fields` has not run yet. It runs after
+    # the response is sent because it is a model call measured in seconds, and
+    # the client polls `GET /vault/documents` (or listens on `/vault/events`)
+    # for the move from `scanning` to `extracted`.
+    background.add_task(_extract_in_background, vault, user["id"], doc["public_id"])
+
     # upload_document returns the bare inserted row (status: "scanning"), not
     # the card-shaped output; list_documents is where VaultService derives
     # nameEn/nameBn/severity/finding/action, so re-fetch and pick the new row
     # rather than duplicate that shaping logic here.
     cards = await vault.list_documents(user["id"])
-    shaped = next(c for c in cards if c["id"] == doc["public_id"])
+    shaped = next((c for c in cards if c["id"] == doc["public_id"]), None)
+    if shaped is None:  # pragma: no cover - the row was just written in this request
+        raise NotFound(
+            detail_en="The uploaded document could not be read back.",
+            detail_bn="আপলোড করা নথিটি আবার পড়া যায়নি।",
+        )
     return DocumentOut(**shaped)
+
+
+async def _extract_in_background(vault: VaultService, user_id: int, public_id: str) -> None:
+    """`VaultService.extract_document` records its own failures on the
+    document row; this only guards against something unforeseen taking down
+    the background task runner with it."""
+    try:
+        await vault.extract_document(user_id, public_id)
+    except Exception:  # noqa: BLE001 - a background task must not raise into the server
+        log.exception("extraction task failed document=%s", public_id)
 
 
 @router.get("/vault/documents", response_model=Page[DocumentOut])
@@ -215,6 +273,9 @@ async def get_document(
         status=doc["status"],
         uploaded_at=doc["uploaded_at"],
     )
+
+
+_DOWNLOAD_CHUNK = 64 * 1024
 
 
 def _sign_download(document_id: str, expires_at: int) -> str:
@@ -250,7 +311,7 @@ async def download_file(
     sig: str = Query(...),
     user: Mapping = Depends(get_current_user),
     vault: VaultService = Depends(get_vault_service),
-) -> Response:
+) -> StreamingResponse:
     """Companion route to `GET /vault/documents/{id}/download`'s signed URL.
     See the module docstring: not a separate contract path, added because a
     signed URL has to resolve to something."""
@@ -264,13 +325,23 @@ async def download_file(
             detail_en="This download link is not valid.",
             detail_bn="এই ডাউনলোড লিংকটি সঠিক নয়।",
         )
-    doc = await vault.get_document(user["id"], document_id)
-    ciphertext = Path(doc["storage_path"]).read_bytes()
-    plaintext = decrypt_file(ciphertext, doc["wrapped_dek"], doc["nonce"])
-    return Response(
-        content=plaintext,
+    plaintext, doc = await vault.read_document_bytes(user["id"], document_id)
+
+    def chunks() -> Iterator[bytes]:
+        for start in range(0, len(plaintext), _DOWNLOAD_CHUNK):
+            yield plaintext[start : start + _DOWNLOAD_CHUNK]
+
+    return StreamingResponse(
+        chunks(),
         media_type=doc["mime_type"],
-        headers={"Content-Disposition": f'attachment; filename="{doc["original_name"]}"'},
+        headers={
+            # The filename was stripped of quotes and control characters on
+            # upload (`_safe_filename`), so it is safe to interpolate here.
+            "Content-Disposition": f'attachment; filename="{doc["original_name"]}"',
+            "Content-Length": str(len(plaintext)),
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 
