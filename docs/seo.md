@@ -199,7 +199,7 @@ a single lab run.
 experience is unevenly distributed — strong LTE in Dhaka/Chittagong city
 centers, materially worse outside them, and load-shedding-adjacent network
 instability is enough of a known issue that `Layout.tsx` already ships an
-offline/"Load-Shedding Mode" status banner. Budgeting for the median
+streaming answer surface. Budgeting for the median
 realistic case (not the best case) is the only way these targets mean
 anything.
 

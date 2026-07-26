@@ -38,9 +38,19 @@ The commitments follow the spirit of the IEEE and ACM codes of ethics: hold para
 
 ## 4. Human-centred design
 
-The design starts from real usage constraints in Bangladesh, not from a persona template. Bangla is the first language of the interface, with Banglish input accepted and voice input for users more comfortable speaking than typing. The app tolerates disconnection: Load-Shedding Mode keeps the student's plan, vault status, and verified answers available offline and queues actions. Data cost matters, so first load is budgeted under 300 KB of compressed JavaScript. Literacy range is respected through plain-language explanation patterns (every technical term explained at first use, in Bangla). The pilot with students from at least three districts outside Dhaka exists to test these assumptions against reality, and pilot feedback flows into the replay buffer, so lived experience literally trains the system.
+The design starts from real usage constraints in Bangladesh, not from a persona template. Bangla is the first language of the interface, with Banglish input accepted and voice input for users more comfortable speaking than typing. Connections in Bangladesh are often slow rather than absent, so the design target is a usable first paint on a mid-range Android over a congested mobile network: first load is budgeted under 300 KB of compressed JavaScript, fonts are self-hosted and subset so no third-party request sits on the critical path, and every answer streams token by token so the student sees progress rather than a spinner. Literacy range is respected through plain-language explanation patterns (every technical term explained at first use, in Bangla). The pilot with students from at least three districts outside Dhaka exists to test these assumptions against reality, and pilot feedback flows into the replay buffer, so lived experience literally trains the system.
 
-## 5. Security assurances
+## 5. The reviewer role, and what it costs
+
+Digonto has two kinds of user. Students use the product. Reviewers hold the three decisions that should not be automated, and the reason each is human is specific rather than decorative.
+
+A portal change that the model classified with low confidence reaches no student until a reviewer confirms the category. The asymmetry justifies the cost: a false alert telling five hundred students their deadline moved is far more damaging than an alert that arrives six hours late. A corrected answer is written by a reviewer rather than inferred from a negative rating, because a thumbs-down says something is wrong and not what the right answer was, and that correction is the highest-value item in the training buffer. No model adapter reaches students on the automatic benchmark alone, because a benchmark catches the regressions it was built to measure and not the ones it was not.
+
+Reviewers cannot read student documents. They hold no key material, and there is no code path from a reviewer route to vault contents, so this is enforced by the absence of the capability rather than by a permission flag. Every reviewer access to student-linked data is logged and shown to that student in their own account. Every suspension or ban requires a bilingual written reason, because that reason is shown to the person it affects.
+
+The honest cost: human review does not scale linearly with users, and a reviewer under time pressure approves. The mitigation is to keep the queue small by construction. Only low-confidence classifications enter it, and the confidence threshold is tuned against reviewer capacity rather than set once. If the queue grows faster than it is cleared, the correct response is to raise crawl quality, not to raise the threshold.
+
+## 6. Security assurances
 
 - Self-hosted inference: passports, bank statements, and transcripts never leave the deployment VM; no third-party model API receives vault content.
 - Vault files encrypted at rest (AES-256-GCM, per-user data keys under a wrapped master key); TLS 1.3 in transit; signed, expiring upload URLs.
@@ -50,7 +60,7 @@ The design starts from real usage constraints in Bangladesh, not from a persona 
 - Agent containment: per-agent tool allow-lists enforced by the runtime; no deletion tools exist for agents; every tool call is audit-logged.
 - Operational: nightly off-VM backups, model rollback tags, dead-letter queues with alerts, and rate limiting per user and IP.
 
-## 6. Risks and mitigations
+## 7. Risks and mitigations
 
 | Risk | Mitigation |
 | --- | --- |
@@ -59,3 +69,5 @@ The design starts from real usage constraints in Bangladesh, not from a persona 
 | Wrong answer harms a student | Refusal contract, citations on every claim, human review queue for low-confidence classifications |
 | Funding shortfall | Cost floor is one VM; the service degrades in coverage, not in existence |
 | Regulation of AI information services | Information-with-provenance posture, no advice claims, early engagement with UGC and FACD-CAB |
+| Reviewer queue grows faster than it is cleared | Confidence threshold tuned against reviewer capacity; the response is better crawl quality, never a higher threshold that silently ships unreviewed alerts |
+| Model provider terms change | Gemma 4 is Apache 2.0 and the weights are held locally, so the deployment continues regardless of any hosted service |

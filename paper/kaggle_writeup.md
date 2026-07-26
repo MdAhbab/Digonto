@@ -45,7 +45,7 @@ bank officer or a visa officer exactly where a claim came from.
 slips or an embassy changes a rule, every dependent step is recomputed and the
 student is told what changed and why.
 
-Four agents do the work a consultancy charges for. **Prohori** audits the
+Seven agents do the work a consultancy charges for. **Prohori** audits the
 document vault against each target's real checklist and flags missing, expiring,
 and inconsistent items. **Khoji** matches the student profile to scholarships
 with a reason for every criterion and builds complete budgets, including the bank
@@ -53,13 +53,17 @@ balance the embassy actually requires. **Shonchari** runs mock visa interviews
 conditioned on the student's own file and scores answers for consistency with
 their documents, which is what a visa officer checks. **Porter** watches the
 portals and alerts affected students in Bangla, quoting and citing the changed
-passage.
+passage. **Bicharok** reads a refusal letter and maps each ground to a remedy.
+**Lekhok** checks a statement of purpose against the student's own documents for
+contradictions. **Dalil** audits a consultancy contract clause by clause.
 
 Two further features address the local reality directly. The **Agent Fee Reality
 Check** takes a consultancy quote and itemises it into free services, fixed
-official fees, and a fair residual, each line cited. **Load-Shedding Mode** keeps
-the app usable offline with the student's cached plan and last verified answers,
-because power cuts are routine.
+official fees, and a fair residual, each line cited. **Rejection Autopsy** takes
+an actual refusal letter, reads it with Gemma's vision capability, maps each
+stated ground to the rule it cites, and says in Bangla whether it is remediable
+and how. With 54.9 percent of Schengen applications from Bangladesh refused in
+2024, the second attempt matters as much as the first.
 
 Digonto is not a chatbot wrapper. The conversational surface is the smallest
 part. The value is in scheduled crawling, diffing, versioning, event-driven
@@ -73,7 +77,7 @@ Per-Layer Embeddings), a 131,072 token context window, Apache 2.0 licence, and
 native support for tool calling, vision, audio, and thinking mode.
 
 Those capabilities decided the architecture. Native **tool calling** drives the
-four agents with no hand-written parser. Native **vision** extracts fields from
+seven agents with no hand-written parser. Native **vision** extracts fields from
 uploaded transcripts and bank statements. Native **audio** accepts Bangla voice
 input for users who prefer speaking to typing. One model, one runtime, no second
 service. It fits in the RAM of a modest machine, which is why inference is
@@ -123,15 +127,16 @@ WAL mode (split into an app database, an append-heavy events database, and a
 learning database) for users, snapshots, audit log, and replay buffer, an
 encrypted filesystem volume for vault documents and archived pages, and Redis for
 the semantic cache and rate limits. Litestream streams the SQLite files off-VM
-continuously. Caddy terminates TLS at digonto.ahbab.dev. Everything ships as one
-Docker Compose file on a single machine. See Graphics 2 and 3.
+continuously. nginx terminates TLS at digonto.ahbab.dev, with response buffering
+disabled on the streaming routes so tokens reach the client as they are produced.
+Everything ships as one Docker Compose file on a single machine. See Graphics 2 and 3.
 
 One event, `portal.changed`, reaches four consumers: knowledge store update,
 semantic cache invalidation, timeline re-planning for affected students, and a
 Bangla alert. That fan-out is the specific reason the design is event-driven
 rather than request-driven.
 
-The four agents run on Gemma 4 tool calling through Ollama's OpenAI-compatible
+The seven agents run on Gemma 4 tool calling through Ollama's OpenAI-compatible
 endpoint, with custom tools exposed through three MCP servers (portal, vault,
 funding). Agents are capped at eight tool steps, hold runtime-enforced tool
 allow-lists (no agent has a delete tool), and log every call to an audit table.

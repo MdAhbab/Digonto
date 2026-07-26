@@ -1,6 +1,6 @@
 # Digonto Agentic Workflows
 
-Four autonomous agents built on **Gemma 4 E2B native function calling**, served locally by Ollama through its OpenAI-compatible API (`/v1/chat/completions` with `tools`). Any OpenAI-compatible client SDK works against this endpoint unchanged, which keeps the agent code portable. Agents run in the backend's arq worker (see `backend/backend.md`, section 6), are triggered by events or cron, are limited to 8 reasoning-tool steps, and log every tool call to an audit table in `events.db`.
+Seven autonomous agents built on **Gemma 4 E2B native function calling**, served locally by Ollama through its OpenAI-compatible API (`/v1/chat/completions` with `tools`). Any OpenAI-compatible client SDK works against this endpoint unchanged, which keeps the agent code portable. Agents run in the backend's arq worker (see `backend/backend.md`, section 6), are triggered by events or cron, are limited to 8 reasoning-tool steps, and log every tool call to an audit table in `events.db`.
 
 **Capability check before building any of this.** `ollama show gemma4:e2b` on the development machine lists `tools`, `vision`, `audio`, and `thinking` alongside `completion`. Tool support is what makes these four agents native function callers rather than regex parsers over free text, so verify it on the cloud VM after pulling the model and refuse to start the API if the capability is absent. Note that the ollama.com library page tables do not show tool support for the E-variants; the local manifest is authoritative. Native `vision` is used by Prohori's `extract_fields`, and native `audio` is used by Shonchari's voice mode, so all four agents plus the voice and document paths run on one served model with no second runtime.
 
@@ -10,7 +10,7 @@ Custom tools are exposed to the model two ways: internal tools (direct async Pyt
 
 - **`digonto-portal-mcp`:** `fetch_snapshot`, `diff_snapshots`, `list_watched_portals`, `register_portal`
 - **`digonto-vault-mcp`:** `list_documents`, `read_doc_metadata`, `extract_fields` (OCR + Gemma vision pass), `flag_document` (no delete tool exists)
-- **`digonto-funding-mcp`:** `search_scholarships`, `get_fx_rate`, `get_solvency_rules`, `compose_budget`
+- **`digonto-funding-mcp`:** `search_scholarships`, `get_fx_rate`, `get_solvency_rules`, `compose_budget`, `get_fee_benchmarks`
 
 ---
 
@@ -61,6 +61,42 @@ Custom tools are exposed to the model two ways: internal tools (direct async Pyt
 **Workflow:** Shonchari runs a turn-based mock interview (text, or voice via the app's speech layer) asking questions conditioned on the student's actual file, including the uncomfortable ones (funding gaps, study-gap years, weak ties). Each answer is scored against the student's own documents for consistency, which is exactly what a visa officer checks. The final report explains, in Bangla, what each question is really probing and where the student's answers contradicted their file, with concrete rewrites.
 
 **Boundary:** Shonchari coaches truthful presentation only. If a student asks how to misrepresent facts, the agent refuses and explains the legal consequences of visa fraud.
+
+## Agent 5: Bicharok (বিচারক), the Rejection Autopsy agent
+
+**Purpose:** more than half of Bangladeshi Schengen applications were refused in 2024. The refusal letter states the grounds, in administrative English, using paragraph references the applicant has never seen. A student who cannot read the refusal cannot correct it, so they pay an agent again, or give up.
+
+**Trigger:** on-demand when a document of kind `visa_refusal` is added to the vault.
+
+**Tools:** `digonto-vault-mcp.extract_fields` (Gemma **vision** pass over the letter), internal `match_ground_to_rule(quoted_text, country, visa_type)` (retrieval against the knowledge store), internal `assess_remediable(ground, student_file)` (Gemma structured output: yes, partly, no, with reasoning), internal `write_remedial_steps(case_id)`.
+
+**Workflow:** Bicharok reads the letter with the model's vision capability rather than a separate OCR service, since the same served model handles both. It splits the refusal into distinct grounds, quotes each verbatim, and matches each to the rule it references in the knowledge store. For every ground it produces a plain Bangla explanation of what the officer actually meant, a judgement of whether it is remediable, and the concrete remedy. Grounds that are not remediable are said to be not remediable; that is more useful than false hope. The output can be written directly into the Visa Timeline Reactor as remedial steps before a second attempt.
+
+**Boundary:** Bicharok never suggests concealing a prior refusal. Most application forms ask about refusal history directly, and advising otherwise would be advising visa fraud. It says this explicitly when a student asks.
+
+## Agent 6: Lekhok (লেখক), the Statement Forensics agent
+
+**Purpose:** a statement of purpose that contradicts the applicant's own documents is a common, avoidable refusal ground. Consultancies frequently write these statements, which is exactly how the contradictions get in.
+
+**Trigger:** on-demand from the statement editor; automatically re-run when a target or a document changes.
+
+**Tools:** internal `get_student_file_summary` (PII-minimised, consented), `digonto-vault-mcp.read_doc_metadata`, internal `check_claim(claim, file_summary)` (Gemma structured output per claim), internal `suggest_rewrite(excerpt, finding)`.
+
+**Workflow:** Lekhok extracts every factual claim from the statement, then checks each against the student's own record: dates against transcripts, funding claims against the budget, employment against the CV. It reports contradictions, unsupported claims, vague passages that assert nothing, and clichés that occupy space a visa officer is scanning. Each finding carries a bilingual explanation and a suggested rewrite that the student edits themselves.
+
+**Boundary:** Lekhok does not write the statement. It reports problems and suggests phrasing for claims the student has already made truthfully. A statement written by a model is exactly the artefact that admissions offices are now screening for.
+
+## Agent 7: Dalil (দলিল), the Contract Auditor
+
+**Purpose:** students sign consultancy agreements they have not read, in a language they may not read well, containing clauses that keep their original documents or forfeit their whole fee on refusal.
+
+**Trigger:** on-demand when a document of kind `consultancy_contract` is uploaded.
+
+**Tools:** `digonto-vault-mcp.extract_fields` (vision pass), internal `classify_clause(text)` (Gemma enum: fee, refund, document_retention, exclusivity, liability, guarantee, other), internal `assess_risk(clause, category)`, `digonto-funding-mcp.get_fee_benchmarks`.
+
+**Workflow:** Dalil segments the contract into clauses, classifies each, and rates the risk it transfers onto the student. For every high-risk clause it explains in Bangla what the clause actually permits the firm to do, and states a fair alternative. Two categories get special attention because they cause the most harm: original document retention, which leaves a student unable to apply elsewhere, and any clause guaranteeing a visa outcome, which no agent can lawfully promise. The fee clauses feed the Agent Fee Reality Check.
+
+**Boundary:** Dalil reports what a contract says and how unusual it is. It does not give legal advice and says so, and it recommends a lawyer where the amounts justify one.
 
 ---
 

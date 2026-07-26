@@ -6,7 +6,7 @@
 > the same pass, so the title, the numbers, and the contribution count never fall
 > out of step.
 >
-> Body length: about 2,900 words, excluding abstract, figures, tables, and
+> Body length: about 3,200 words, excluding abstract, figures, tables, and
 > references. 36 references, every DOI resolved and every URL fetched on
 > 26 July 2026.
 
@@ -24,7 +24,7 @@ information is published in complex English and is revised without notice. About
 2,000 such firms operate, and only about 400 are registered with the sector
 association. We present Digonto, a free navigator that answers study abroad
 questions in Bangla, monitors official portals for changes, and acts for the
-student through four autonomous agents. Digonto introduces Recurrent Continual
+student through seven autonomous agents. Digonto introduces Recurrent Continual
 Retrieval-Augmented Generation, or RC-RAG. RC-RAG places three loops of different
 speed around one small open model, Gemma 4 E2B, hosted on a single low cost
 virtual machine. A fast loop answers a question and cites a stored copy of the
@@ -91,13 +91,16 @@ plain Bangla, are held in the model weights and are revised monthly by
 parameter-efficient continual learning with rehearsal. Every generated claim
 cites a timestamped copy of its source.
 
-This paper makes four contributions. First, we specify RC-RAG, a three-loop
+This paper makes five contributions. First, we specify RC-RAG, a three-loop
 architecture that combines event-driven retrieval freshness with gated continual
 model improvement on a single small model. Second, we give an event-driven
 backend design that runs RC-RAG on one virtual machine with three explicit
-caching layers. Third, we describe four autonomous agents built on Gemma 4 tool
-calling that turn the knowledge store into actions. Fourth, we give an evaluation
-protocol and state plainly what has not yet been measured.
+caching layers. Third, we describe seven autonomous agents built on Gemma 4 tool
+calling that turn the knowledge store into actions, including three that address
+what happens after a refusal, which is where the published failure rates
+concentrate. Fourth, we place a human reviewer at three specific points and argue
+for each: alert release, answer correction, and model promotion. Fifth, we give an
+evaluation protocol and state plainly what has not yet been measured.
 
 ## II. Background and Related Work
 
@@ -204,11 +207,14 @@ correct but rated unclear. Identifying information is removed before storage, an
 only consented interactions are kept. Every two to four weeks the buffer is mixed
 one to one with a fixed rehearsal set drawn from the original instruction data,
 and a rank 16 adapter is trained with quantised fine-tuning [28], [29]. The
-rehearsal mixture is the defence against forgetting [23]. Promotion is gated: the
-candidate must match or exceed the current model on a frozen 200-question
-benchmark, and no single metric may fall by more than one point. Promotion and
-rollback are recorded as single events, and the previous model tag is always
-retained.
+rehearsal mixture is the defence against forgetting [23]. Promotion is gated
+twice. The automatic gate requires the candidate to match or exceed the current
+model on a frozen 200-question benchmark, with no single metric falling by more
+than one point. A candidate that clears it then waits for a human reviewer. The
+two gates catch different failures: the benchmark catches regressions it was built
+to measure, and the reviewer catches the ones it was not, such as a fluent answer
+that adopts the wrong register for a first-time applicant. Promotion and rollback
+are recorded as single events, and the previous model tag is always retained.
 
 ## IV. System Design
 
@@ -229,7 +235,7 @@ applicants share a small set of concerns. The model is kept resident with a
 stable prompt prefix, so the shared instructions and tool definitions are encoded
 once rather than on every request.
 
-**Agents.** Four agents run on Gemma 4 tool calling against internal functions
+**Agents.** Seven agents run on Gemma 4 tool calling against internal functions
 and three custom Model Context Protocol servers [32], following the standard
 pattern of alternating reasoning and tool use [30]. Porter watches portal-change
 events, classifies each change into an enumerated type, discards wording-only
@@ -243,6 +249,18 @@ per-criterion reason, plus a complete budget including the bank balance the
 embassy actually requires. Shonchari runs mock visa interviews conditioned on the
 student's own file and reports contradictions between spoken answers and
 submitted documents, because consistency is what a visa officer checks.
+
+Three further agents address failures that occur after a first attempt, which is
+where the published refusal statistics concentrate. Bicharok reads a refusal
+letter with the model's vision capability, maps each stated ground to the rule it
+refers to, and reports in Bangla whether that ground is remediable and what remedy
+applies. With more than half of Bangladeshi Schengen applications refused in 2024
+[4], the second attempt matters as much as the first, and a student who cannot
+read the refusal cannot correct it. Lekhok compares a statement of purpose against
+the student's own documents and reports contradictions, unsupported claims, and
+passages too vague to help. Dalil reads a consultancy contract and reports clause
+by clause which terms are ordinary and which transfer risk onto the student, with
+a fair alternative for each.
 
 Three controls bound agent behaviour. Each agent is limited to eight tool steps.
 Each agent holds a tool allow-list enforced by the runtime rather than by the
@@ -305,9 +323,14 @@ buffer holds no document contents, and text entering it passes an automated
 removal step for names and identifying numbers. Students can export or
 permanently delete their data.
 
-The interface is Bangla-first, accepts voice input for users who prefer speaking
-to typing, and keeps each student's plan and last verified answers readable
-during power cuts, which remain routine in much of the country. The service
+The interface is Bangla-first and accepts voice input for users who prefer
+speaking to typing. A second role, the reviewer, holds the parts of the system
+that should not be automated: a low-confidence portal change is not sent to any
+student until a reviewer confirms the category, a corrected answer is recorded by
+a reviewer rather than inferred from a negative rating, and no adapter reaches
+students on the automatic gate alone. The reviewer role carries no decryption
+capability and cannot read document contents, and every reviewer access to
+student-linked data is logged and shown to that student. The service
 addresses Sustainable Development Goal 4 on equitable access to higher education,
 and Goal 10, target 10.7, on orderly and responsible migration. It is free for
 students permanently. Operating cost stays near the cost of one virtual machine,
@@ -318,9 +341,12 @@ institutional revenue rather than student fees funds the service.
 
 Five limitations are worth stating before a reviewer states them. First, no
 quantitative results exist yet, and Section V defines protocol rather than
-findings. Second, the forgetting defence is rehearsal plus a gate, and the gate is
-only as reliable as the frozen benchmark, so leakage of benchmark items into
-training data must be audited every cycle. Third, crawling depends on portal
+findings. Second, the forgetting defence is rehearsal plus two gates, and the
+automatic gate is only as reliable as the frozen benchmark, so leakage of
+benchmark items into training data must be audited every cycle. The human gate has
+its own limit: it does not scale, and a reviewer under time pressure approves. We
+report reviewer decision counts and time spent alongside the benchmark scores
+rather than presenting human oversight as free. Third, crawling depends on portal
 stability, and a redesign can break a parser silently. The system reports source
 silence instead of guessing, but silence is still a degraded state. Fourth,
 Bangla clarity rubrics carry rater subjectivity, which two raters and

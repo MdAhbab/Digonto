@@ -1,0 +1,1 @@
+"""Digonto backend application package."""

@@ -1,169 +1,313 @@
-# Digonto (দিগন্ত)
+<div align="center">
+
+# দিগন্ত · Digonto
 
 **A free, Bangla-first Study Abroad and Visa Navigator, powered by Gemma 4 E2B.**
 
-Digonto is the Bangla word for horizon. The project exists so that a student in
-Rangpur or Barishal can plan an international education without paying a
-consultancy firm a semester's worth of tuition for advice that is often wrong.
+*Digonto is the Bangla word for horizon.*
 
-Competition: [Build With Gemma @ Bangladesh](https://kaggle.com/competitions/build-with-gemma-bangladesh)
-Tracks: **1. The Local Language Track** (primary, Study Abroad and Visa Navigator
-theme) and **5. The Autonomous Agent Track** (Gemma 4 native function calling
-drives four agents).
-Deployment target: **https://digonto.ahbab.dev** (Docker on a cloud virtual machine).
+[![Track](https://img.shields.io/badge/Track-Local%20Language-0f3d33)](https://kaggle.com/competitions/build-with-gemma-bangladesh)
+[![Track](https://img.shields.io/badge/Track-Autonomous%20Agent-0f3d33)](https://kaggle.com/competitions/build-with-gemma-bangladesh)
+[![Model](https://img.shields.io/badge/Model-gemma4%3Ae2b-4285F4)](https://ollama.com/library/gemma4)
+[![Licence](https://img.shields.io/badge/Licence-Apache--2.0-555)](LICENSE)
+[![Cost to students](https://img.shields.io/badge/Cost%20to%20students-Free%20forever-059669)](docs/business_model.md)
+
+</div>
+
+---
+
+A student in Rangpur or Barishal should be able to plan an international
+education without paying a consultancy firm a semester's worth of tuition for
+advice that is often wrong. That is the entire purpose of this project.
+
+**Live:** https://digonto.ahbab.dev · **Competition:**
+[Build With Gemma @ Bangladesh](https://kaggle.com/competitions/build-with-gemma-bangladesh)
 
 ---
 
 ## The problem, in verified numbers
 
-Every figure below was checked against its source on 26 July 2026. Sources are
-listed in `docs/paper/references.bib`.
+Every figure was checked against its source on 26 July 2026. Full citations with
+DOIs are in [`docs/paper/references.bib`](docs/paper/references.bib).
 
-- **52,799** Bangladeshi students were studying abroad in 2023 across 55
-  countries (UNESCO), roughly three times the number fifteen years earlier.
-- **667.77 million US dollars** left the country for overseas education in FY25,
-  through 109,290 banking transactions. That is a record for a single year.
-- **About 2,000** student consultancy firms operate in Bangladesh. **About 400**
-  are registered with the sector association (FACD-CAB). The rest run on a
-  general trade licence with no specialised supervision.
-- **54.90 percent**: the Schengen visa refusal rate for Bangladeshi applicants in
-  2024. Of 39,345 applications, 20,957 were refused, up from a 42.8 percent
-  refusal rate in 2023. Every refusal also costs a non-refundable fee.
-- **About 65 percent** of applications from India and Bangladesh to one United
-  States university were found likely fraudulent, much of it traced to agents.
+| | |
+|---|---|
+| **52,799** | Bangladeshi students studying abroad in 2023, across 55 countries. Roughly three times the number fifteen years earlier. |
+| **$667.77M** | Left the country for overseas education in FY25 alone, through 109,290 banking transactions. A record for a single year. |
+| **~2,000 / ~400** | Consultancy firms operating in Bangladesh, versus those registered with the sector association. The rest run on a general trade licence with no specialised supervision. |
+| **54.90%** | Schengen visa refusal rate for Bangladeshi applicants in 2024: 20,957 refusals out of 39,345 applications, up from 42.8% in 2023. Every refusal also costs a non-refundable fee. |
+| **~65%** | Of applications from India and Bangladesh to one United States university found likely fraudulent, much of it traced to agents. |
 
-The information a student needs is public. It is also scattered across
-jargon-heavy English portals that change without notice. Digonto reads those
-portals so the student does not have to, and answers in clear Bangla.
+The information a student needs is already public. It is also written in dense
+administrative English, spread across dozens of portals, and revised without
+announcement. Digonto reads those portals so the student does not have to, and
+answers in clear Bangla with a citation for every claim.
 
 ## What Digonto is not
 
-Digonto is not a chatbot with a knowledge base attached. The conversational
-surface is the smallest part of the system. The value comes from automation:
-portals are crawled and diffed on a schedule, changes become events, events
-update a versioned knowledge store, agents act on the student's behalf, and the
-model itself improves from real usage through a gated continual learning cycle.
+Not a chatbot with a knowledge base attached. The conversational surface is one
+page out of twelve. The value comes from automation: portals are crawled and
+diffed on a schedule, changes become events, events update a versioned knowledge
+store, agents act on the student's behalf, and the model itself improves from
+real corrections behind two promotion gates.
 
-## Core architecture: Recurrent Continual RAG (RC-RAG)
+---
 
-Digonto runs three loops of different speed around a single Gemma 4 E2B model
-served by Ollama.
+## Architecture: Recurrent Continual RAG (RC-RAG)
 
-1. **Fast loop (milliseconds):** a question is embedded, matched against a
-   semantic cache, and answered from the versioned vector store with citations to
-   the exact portal snapshot used.
-2. **Recurrent loop (hours):** scheduled crawlers re-fetch embassy, university,
-   and scholarship portals. A diff engine detects any addition, removal, or edit
-   in the source text. Changed passages are re-embedded and written to a new
-   store version. Affected students receive alerts. Nothing waits for a user to
-   ask.
-3. **Continual loop (weeks):** unanswerable questions, corrected answers, and
-   verified reviewer feedback accumulate in a replay buffer. A periodic LoRA
-   fine-tune (low-rank adaptation, a lightweight training method) consolidates
-   this experience into the model, using rehearsal so earlier ability in Bangla
-   explanation is not lost. The updated adapter is promoted only after passing a
-   frozen benchmark, and is hot-swapped into Ollama with a rollback path.
+Three loops of different speed around one Gemma 4 E2B model. The design principle
+is a separation of duties by timescale: facts that change daily live in a
+versioned retrieval store, and skills that improve slowly live in the model
+weights.
 
-Retrieval keeps facts current daily. Continual learning keeps the model's Bangla
-explanation quality improving monthly. Each mechanism compensates for a specific
-weakness of the other. The full treatment is in `docs/paper/digonto.tex`.
+```mermaid
+flowchart LR
+    subgraph R["Recurrent loop · hours"]
+        P[Official portals] --> CR[Crawl] --> H{Hash<br/>changed?}
+        H -- no --> STOP[Stop, costs nothing]
+        H -- yes --> D[Passage diff] --> E[Re-embed<br/>changed only] --> KB[(Versioned<br/>knowledge store)]
+    end
+
+    subgraph F["Fast loop · milliseconds"]
+        Q[Student question<br/>Bangla / Banglish / English] --> SC{Semantic<br/>cache hit?}
+        SC -- yes --> A[Cited answer]
+        SC -- no --> RT[Hybrid retrieval<br/>dense + BM25] --> G[Gemma 4 E2B<br/>schema-constrained] --> A
+        G -.no supporting passage.-> RF[Explicit refusal]
+    end
+
+    subgraph C["Continual loop · weeks"]
+        RB[(Replay buffer<br/>refusals + corrections)] --> MX[Rehearsal mix 1:1] --> TR[Train adapter] --> G1{Gate 1<br/>frozen benchmark}
+        G1 -- passes --> G2{Gate 2<br/>human reviewer}
+        G2 -- approved --> PR[Promote]
+        G1 -- fails --> RBK[Roll back]
+        G2 -- rejected --> RBK
+    end
+
+    KB --> RT
+    A --> RB
+    RF --> RB
+    PR -.hot swap.-> G
+```
+
+**Why both loops.** Retrieval handles fact turnover well but cannot improve how
+clearly the model explains a solvency rule in Bangla. Fine-tuning improves that
+skill but is a poor carrier of facts that change weekly. Each mechanism
+compensates for a specific weakness of the other. Full treatment in
+[`docs/paper/`](docs/paper/).
+
+### One event, four consumers
+
+This is the specific reason the backend is event-driven rather than
+request-driven.
+
+```mermaid
+flowchart TD
+    EV["event: portal.changed"] --> C1[Knowledge store update]
+    EV --> C2[Semantic cache invalidation]
+    EV --> C3[Timeline re-planning<br/>for every affected student]
+    EV --> C4[Bangla alert<br/>quoting the changed sentence]
+```
+
+---
 
 ## Why Gemma 4 E2B
 
 Verified against the running install with `ollama show gemma4:e2b`:
 
 | Property | Value |
-| --- | --- |
+|---|---|
 | Effective parameters | 2.3B (5.1B total, Per-Layer Embeddings) |
 | Context length | 131,072 tokens |
 | Capabilities | completion, **vision**, **audio**, **tools**, thinking |
 | Licence | Apache 2.0 |
 
-Native tool calling is what makes the four agents possible without a fragile
-hand-written parser. Native vision handles document field extraction. Native
-audio handles Bangla voice input. One model, one runtime, no second service. It
-fits in the RAM of a modest virtual machine, so inference is self-hosted and
-student passports never leave the deployment.
+Native **tool calling** is what makes seven real function-calling agents possible
+instead of a fragile parser over free text. Native **vision** reads uploaded
+transcripts, bank statements, and refusal letters. Native **audio** takes Bangla
+voice input. One model, one runtime, no second service.
 
-## Four agentic features (Gemma 4 native function calling)
+It fits in the memory of a modest virtual machine, which decides two things that
+matter more than benchmark scores: student passports never leave our own server,
+and the marginal cost of an answer is close to the electricity cost of a machine
+we already rent. That is what makes "free, permanently" a plan rather than a
+promise.
 
-Detailed specifications with tool schemas and MCP servers are in `agents.md`.
+---
 
-1. **Porter, the Portal Watch agent:** monitors deadline and policy changes for
-   each student's saved programmes and files structured Bangla alerts before
-   deadlines move past recovery.
-2. **Prohori, the Document Guardian agent:** audits the student's document vault
-   against the actual checklist of each target university and embassy, flags
-   missing, expiring, or inconsistent documents, and drafts request letters.
-3. **Khoji, the Scholarship Scout agent:** continuously matches the student's
-   profile against a funding index and produces a ranked, budgeted funding plan
-   in Bangla, including bank solvency requirements.
-4. **Shonchari, the Interview Rehearsal agent:** runs mock visa interviews
-   grounded in the student's own file, then delivers a structured weakness report
-   explaining in Bangla what each question is really testing.
+## Seven Gemma agents
 
-## Four innovative features beyond the brief
+Specifications, tool schemas, and MCP servers in [`agents.md`](agents.md).
 
-1. **Visa Timeline Reactor:** a living plan that automatically re-plans every
-   downstream step when one input changes (an IELTS date slips, an embassy
-   changes a rule). Most navigators are static checklists. Digonto's plan is
-   recomputed from events.
-2. **Truth Ledger:** every answer carries a citation to a timestamped snapshot of
-   the source portal, so a student can show a bank or an embassy exactly where a
-   claim came from. This is a direct answer to unverifiable agent advice.
-3. **Agent Fee Reality Check:** a student enters what a consultancy quoted.
-   Digonto itemises which services are free, which are official fees with fixed
-   prices, and what a fair residual would be, with sources for each line.
-4. **Load-Shedding Mode:** the client caches the student's plan, vault status, and
-   last verified answers locally, so the app stays usable during power and
-   connectivity outages, which are a daily reality in much of Bangladesh.
+| Agent | Role |
+|---|---|
+| **পোর্টার** Porter | Watches portals. Classifies each change, discards wording-only edits, alerts affected students with the changed passage quoted and cited. |
+| **প্রহরী** Prohori | Audits the document vault against each target's real checklist. Flags missing, expiring, and inconsistent documents, and drafts request letters. |
+| **খোঁজি** Khoji | Matches the profile against a funding index, with a reason for every criterion, and builds a complete budget including the bank balance the embassy actually requires. |
+| **সঞ্চারী** Shonchari | Runs mock visa interviews conditioned on the student's own file, scoring answers for consistency with their documents, which is what a visa officer checks. |
+| **বিচারক** Bicharok | Reads an actual refusal letter with vision, maps each ground to the rule it cites, and says in Bangla whether it is remediable and how. |
+| **লেখক** Lekhok | Compares a statement of purpose against the student's own documents and reports contradictions, unsupported claims, and vague passages. |
+| **দলিল** Dalil | Reads a consultancy contract clause by clause and reports which terms are ordinary and which transfer risk onto the student. |
+
+The last three exist because more than half of Bangladeshi Schengen applications
+were refused in 2024. The second attempt matters as much as the first, and a
+student who cannot read the refusal cannot correct it.
+
+## Four features beyond the brief
+
+1. **Visa Timeline Reactor** — a plan that re-plans itself. When an IELTS date
+   slips or an embassy changes a rule, every dependent step is recomputed and the
+   student is told exactly what moved and why.
+2. **Truth Ledger** — every claim links to a timestamped snapshot of the source
+   page. A student can show a bank officer where a requirement came from. The
+   verification page is public and needs no account.
+3. **Agent Fee Reality Check** — enter a consultancy quote, get it itemised into
+   free services, fixed official fees, and a fair residual, each line cited.
+4. **Rejection Autopsy** — upload a refusal letter and get a remediation plan
+   mapped to the specific rules cited, written in Bangla.
+
+---
+
+## Two stakeholders
+
+**Students** get everything above, free, permanently.
+
+**Reviewers** hold the three decisions that should not be automated:
+
+- A portal change classified below the confidence threshold reaches nobody until
+  a human confirms it. A false "your deadline moved" alert to five hundred
+  students is worse than a slow one.
+- A corrected answer is recorded by a human, not inferred from a thumbs-down.
+  That correction is the highest-value item in the training buffer.
+- No model adapter reaches students on the automatic benchmark alone.
+
+**Reviewers cannot read student documents.** They hold no key material and there
+is no code path from a reviewer route to vault contents. Every reviewer access to
+student-linked data is logged and shown to that student. See
+[`docs/api_contract.md`](docs/api_contract.md) section 11a.
+
+---
+
+## Run it
+
+```bash
+git clone https://github.com/MdAhbab/Digonto.git
+cd Digonto
+python3 run.py
+```
+
+`run.py` checks Python and Node versions, reports whether Redis, Qdrant and
+Ollama are reachable with the exact command to start each, verifies the model
+reports native tool support, generates per-machine secrets, vendors the
+webfonts, installs both dependency trees, applies migrations, seeds accounts,
+and starts the API and web client together.
+
+| Flag | Effect |
+|---|---|
+| `--check` | run every check and exit without starting anything |
+| `--skip-install` | fast restart, do not touch pip or npm |
+| `--reset` | delete local databases and re-seed |
+| `--backend-only` / `--frontend-only` | run one side |
+
+Prerequisites: Python 3.12+, Node 20+, and `ollama pull gemma4:e2b`.
+
+### Deploy
+
+```bash
+sudo python3 run_onVM.py --domain digonto.ahbab.dev --email you@example.com
+```
+
+Takes a fresh Ubuntu VM to a TLS deployment: verifies DNS actually points at the
+machine before calling certbot, installs Docker from Docker's own repository,
+configures nginx (with proxy buffering off on the streaming routes), obtains and
+auto-renews the certificate, and hardens with ufw, fail2ban, and unattended
+security updates. Idempotent; re-running is the intended way to redeploy.
+
+---
 
 ## Repository layout
 
 ```
 Digonto/
-├── README.md                     you are here
-├── agents.md                     four agentic workflows, tools, MCP servers
+├── run.py                     one command from clone to running
+├── run_onVM.py                one command from bare VM to TLS deployment
+├── docker-compose.prod.yml    api, worker, ollama, redis, qdrant, backup
 ├── backend/
-│   └── backend.md                full backend plan (FastAPI, events, SQLite, caching)
-├── frontend/
-│   └── design/
-│       └── design_instructions.md Claude Opus design brief
-├── paper/
-│   ├── research_paper.md         readable mirror of the paper
-│   └── kaggle_writeup.md         competition writeup (<2,000 words, 11 graphics)
-└── docs/
-    ├── business_model.md         sustainability, SDG, ethics, HCD, security
-    ├── submission_checklist.md   the five required components, mapped to the rubric
-    ├── video_script.md           the 3 to 5 minute demo video, shot by shot
-    ├── notebook_plan.md          the public reproducible notebook
-    └── paper/                    Overleaf drag-and-drop package (LaTeX, not in git)
+│   ├── app/                   FastAPI, MVC, event-driven
+│   │   ├── models/            Pydantic contracts
+│   │   ├── repositories/      data access, parameterised SQL only
+│   │   ├── services/          business logic, emits events
+│   │   ├── routers/           thin HTTP layer
+│   │   ├── agents/            the seven Gemma agents
+│   │   ├── events/            Redis Streams bus, idempotent consumers
+│   │   ├── llm/               model routing
+│   │   └── db/migrations/     numbered SQL, checksum-verified
+│   └── backend.md             engineering plan
+├── frontend/                  React 18 + Vite + Tailwind + Three.js + GSAP
+├── docs/
+│   ├── database.md            full schema, ~45 tables
+│   ├── api_contract.md        every endpoint, mapped to the page it serves
+│   ├── business_model.md      sustainability, SDG, ethics, security
+│   ├── seo.md                 indexing policy, honest about the SPA limitation
+│   ├── video_script.md        the demo video, shot by shot
+│   ├── notebook_plan.md       the public reproducible notebook
+│   ├── submission_checklist.md
+│   └── paper/                 IEEE paper (LaTeX, untracked)
+└── paper/
+    ├── research_paper.md      readable mirror of the paper
+    └── kaggle_writeup.md      competition writeup
 ```
+
+---
+
+## Sustainable Development Goals
+
+<div align="center">
+<img src="docs/assets/sdg/sdg-04.jpg" width="120" alt="SDG 4 Quality Education">
+<img src="docs/assets/sdg/sdg-08.jpg" width="120" alt="SDG 8 Decent Work and Economic Growth">
+<img src="docs/assets/sdg/sdg-10.jpg" width="120" alt="SDG 10 Reduced Inequalities">
+<img src="docs/assets/sdg/sdg-16.jpg" width="120" alt="SDG 16 Peace, Justice and Strong Institutions">
+</div>
+
+| Goal | Target | How Digonto contributes |
+|---|---|---|
+| **4** Quality Education | 4.3, 4.b | Equal access to affordable tertiary education, and making existing scholarships findable rather than assumed. |
+| **8** Decent Work | 8.8 | Reducing extraction by unregistered intermediaries keeps family savings in productive use. |
+| **10** Reduced Inequalities | **10.7** | Orderly, safe, and responsible migration. Accurate, cited visa information reduces both exploitation and refusal-by-misinformation. |
+| **16** Strong Institutions | 16.10 | Public access to information. The Truth Ledger republishes official information verifiably, with provenance. |
+
+*SDG icons © United Nations. Used for informational purposes in line with UN
+guidelines. The United Nations does not endorse this project.*
+
+## Responsibility
+
+**Ethics.** Sourced information, never legal advice, and the interface says so.
+The system refuses rather than guesses on visa-critical questions, and the
+refusal is enforced by a database constraint and an output schema, not by prompt
+wording. Shonchari coaches truthful presentation only and refuses requests to
+misrepresent facts, explaining the legal consequences of visa fraud.
+
+**Privacy and security.** Inference is self-hosted, so passports and bank
+statements never leave the deployment. Vault files are encrypted at rest with
+per-user keys. The training buffer physically cannot store unconsented or
+un-scrubbed data: it is a `CHECK` constraint, not a policy. Full export and hard
+delete, with deletion cascading to files.
+
+**Human-centred design.** Bangla first, not Bangla translated. Voice input for
+users more comfortable speaking than typing. Every technical term explained at
+first use. Design validated with students from at least three districts outside
+Dhaka rather than assumed.
+
+Details and the threat model: [`docs/business_model.md`](docs/business_model.md)
+and [`backend/backend.md`](backend/backend.md).
 
 ## Free for students, sustainable anyway
 
-Digonto is free for every student, permanently. Sustainability comes from
-institutional revenue, not from students: university partnership listings,
-verified-consultancy certification, an institutional API, and grant funding. The
-full model, including cost projections for self-hosted Gemma inference, is in
-`docs/business_model.md`.
+Free for every student, permanently. Revenue comes from institutions, never from
+students: university partnership listings, verified-consultancy certification, an
+institutional API, and grants. What is never sold: student data, answer
+placement, or referrals. Full model in
+[`docs/business_model.md`](docs/business_model.md).
 
-## Responsibility commitments (summary)
+## Licence
 
-**SDG alignment:** SDG 4 (quality education, equitable access to higher
-education), SDG 10 target 10.7 (orderly, safe, and responsible migration), SDG 8
-(reducing exploitative intermediary costs), SDG 16.10 (public access to
-information). **Engineering ethics:** no legal advice is given, only sourced
-information; every generated claim is citable; the system states uncertainty
-instead of guessing on visa-critical questions; no dark patterns and no data
-resale. **Human-centred design:** Bangla-first interface, voice input for
-low-literacy users, offline tolerance, and design decisions tested with students
-rather than assumed. **Security:** passports and financial documents are
-encrypted at rest with per-user keys, inference is self-hosted so documents never
-leave the deployment, and the vault supports full export and deletion. Details
-and the threat model are in `docs/business_model.md` and `backend/backend.md`.
-
-## Team and licence
-
-Built by Team Digonto. Project code will be released under Apache-2.0. Gemma 4 is
-used under the Apache 2.0 licence.
+Project code under Apache-2.0. Gemma 4 is used under the Apache 2.0 licence.

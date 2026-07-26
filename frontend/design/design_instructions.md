@@ -65,7 +65,7 @@ Destination chooser with the second Three.js globe (restrained: monochrome globe
 
 ## 5. Responsiveness and performance
 
-Design mobile-first at 360 px, then 768, 1024, 1440, 1920. The horizontal pinned scenes on the landing page become vertical stepped scenes under 768 px. Three.js hero swaps to a pre-rendered video or an SVG line animation on low-power devices (detect via `deviceMemory`/`hardwareConcurrency` heuristics). Budgets: LCP under 2.5 s on a mid-range Android over 3G-fast, total JS under 300 KB gzip on first load (lazy-load Three.js scenes), fonts subsetted (Bangla subset separately). Load-Shedding Mode: design the offline state for every app page (cached plan visible, actions queued, a thin amber status rule at the viewport top, never a modal).
+Design mobile-first at 360 px, then 768, 1024, 1440, 1920. The horizontal pinned scenes on the landing page become vertical stepped scenes under 768 px. Three.js hero swaps to a pre-rendered video or an SVG line animation on low-power devices (detect via `deviceMemory`/`hardwareConcurrency` heuristics). Budgets: LCP under 2.5 s on a mid-range Android over 3G-fast, total JS under 300 KB gzip on first load (lazy-load Three.js scenes), fonts subsetted (Bangla subset separately). This is an online product served from a virtual machine, so there is no offline mode to design. Design instead for slow connections: skeleton states that match the final layout so nothing shifts on load, and streamed answers that render progressively rather than appearing at once.
 
 ## 6. Accessibility
 
@@ -76,12 +76,12 @@ WCAG 2.2 AA contrast in both themes; full keyboard paths for planner and vault; 
 Work in this order, one deliverable per step:
 
 1. Design tokens: both theme tables (colour, type scale, spacing, radii, rules), typography specimens with Bangla and Latin set together.
-2. Component inventory: buttons, inputs, ledger rows, citation stamp, seals, drawers, tables, empty/offline/refusal states.
+2. Component inventory: buttons, inputs, ledger rows, citation stamp, seals, drawers, tables, and the empty, loading, error, and refusal states. The refusal state is a designed, calm surface, not an error.
 3. Landing page: full-fidelity concept for both themes, desktop and mobile, with a written motion script per section (trigger points, pinned ranges, transforms, durations, easings).
 4. Journey Planner concept, both themes, including the re-flow motion script.
 5. Ask Digonto and Truth Ledger side sheet concepts.
 6. Vault, Funding Studio, Interview Room concepts.
-7. Supporting pages and the offline/error state family.
+7. Supporting pages, the moderator review console, and the loading/error state family.
 8. Motion bible: a single document listing every ScrollTrigger scene, its mobile fallback, and its reduced-motion variant.
 9. Handoff notes: component-to-route map matching the React + Vite structure that will be supplied.
 
