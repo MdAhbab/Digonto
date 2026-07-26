@@ -39,6 +39,32 @@ UNIVERSAL_KINDS = {
     "bank_statement": ("Bank statement", "ব্যাংক স্টেটমেন্ট"),
 }
 
+# Fields whose presence identifies a document as the kind it was filed under.
+# Extraction returning *some* fields, none of which are these, is the signal
+# that a student has filed the wrong paper — a research paper under "passport".
+# Extraction returning nothing at all is not a signal either way; see the
+# type-verification block in `_mechanical_findings`.
+TYPE_MARKER_FIELDS: dict[str, dict[str, Any]] = {
+    "passport": {
+        "keys": {"passport_no", "surname"},
+        "title_en": "This document does not appear to be a valid passport",
+        "title_bn": "এই নথিটি বৈধ পাসপোর্ট বলে মনে হচ্ছে না",
+        "reason": "No passport number or biographical names found on page",
+    },
+    "bank_statement": {
+        "keys": {"balance", "currency"},
+        "title_en": "This document does not appear to be a valid bank statement",
+        "title_bn": "এই নথিটি বৈধ ব্যাংক স্টেটমেন্ট বলে মনে হচ্ছে না",
+        "reason": "No balance or currency figures found on page",
+    },
+    "transcript": {
+        "keys": {"institution", "cgpa"},
+        "title_en": "This document does not appear to be a valid academic transcript",
+        "title_bn": "এই নথিটি বৈধ একাডেমিক ট্রান্সক্রিপ্ট বলে মনে হচ্ছে না",
+        "reason": "No institution or GPA/CGPA found on page",
+    },
+}
+
 # Fields that must agree across documents. A mismatch here is a common and
 # entirely avoidable refusal ground.
 CROSS_CHECK_FIELDS = {
@@ -118,45 +144,36 @@ def _mechanical_findings(
                 }
             )
 
-    # 1b. Document content / type verification
+    # 1b. Document content / type verification.
+    #
+    # This fires only when extraction actually returned fields and none of them
+    # identify the kind the student filed the document under. An empty field set
+    # is *not* evidence of a wrong document: `agents.md` states that a PDF
+    # degrades to previously stored fields rather than being rasterised, because
+    # no rasterisation step exists here, so a perfectly valid passport uploaded
+    # as a PDF legitimately arrives with nothing extracted. Treating that as
+    # "this is not a valid passport" told students their real documents were
+    # invalid, which is worse than saying nothing: the whole point of this desk
+    # is that a finding can be trusted.
     for doc in documents:
         if doc.get("deleted_at") or doc.get("status") == "failed":
             continue
-        kind = doc.get("kind")
-        fields = {f.get("field_key"): f.get("value") for f in (doc.get("fields") or []) if f.get("value")}
-        if kind == "passport" and not ("passport_no" in fields or "surname" in fields):
-            findings.append(
-                {
-                    "code": "INVALID_DOCUMENT_TYPE",
-                    "severity": "critical",
-                    "document_id": doc["id"],
-                    "title_en": "This document does not appear to be a valid passport",
-                    "title_bn": "এই নথিটি বৈধ পাসপোর্ট বলে মনে হচ্ছে না",
-                    "evidence": {"kind": kind, "reason": "No passport number or biographical names found on page"},
-                }
-            )
-        elif kind == "bank_statement" and not ("balance" in fields or "currency" in fields):
-            findings.append(
-                {
-                    "code": "INVALID_DOCUMENT_TYPE",
-                    "severity": "critical",
-                    "document_id": doc["id"],
-                    "title_en": "This document does not appear to be a valid bank statement",
-                    "title_bn": "এই নথিটি বৈধ ব্যাংক স্টেটমেন্ট বলে মনে হচ্ছে না",
-                    "evidence": {"kind": kind, "reason": "No balance or currency figures found on page"},
-                }
-            )
-        elif kind == "transcript" and not ("institution" in fields or "cgpa" in fields):
-            findings.append(
-                {
-                    "code": "INVALID_DOCUMENT_TYPE",
-                    "severity": "critical",
-                    "document_id": doc["id"],
-                    "title_en": "This document does not appear to be a valid academic transcript",
-                    "title_bn": "এই নথিটি বৈধ একাডেমিক ট্রান্সক্রিপ্ট বলে মনে হচ্ছে না",
-                    "evidence": {"kind": kind, "reason": "No institution or GPA/CGPA found on page"},
-                }
-            )
+        fields = {f.get("field_key") for f in (doc.get("fields") or []) if f.get("value")}
+        if not fields:
+            continue
+        expected = TYPE_MARKER_FIELDS.get(doc.get("kind"))
+        if expected is None or fields & expected["keys"]:
+            continue
+        findings.append(
+            {
+                "code": "INVALID_DOCUMENT_TYPE",
+                "severity": "critical",
+                "document_id": doc["id"],
+                "title_en": expected["title_en"],
+                "title_bn": expected["title_bn"],
+                "evidence": {"kind": doc.get("kind"), "reason": expected["reason"]},
+            }
+        )
 
     # 2. Expiry, including the passport validity margin.
     travel = _parse_date((target or {}).get("intake_start")) or (today + timedelta(days=270))

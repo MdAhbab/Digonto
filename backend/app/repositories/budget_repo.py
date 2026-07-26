@@ -109,11 +109,34 @@ class BudgetRepo:
         return dict(row) if row else None
 
     async def solvency_rule(self, country_code: str, visa_type: str) -> dict[str, Any] | None:
+        """The maintenance requirement for a country, preferring an exact
+        visa-type match and falling back to the country's newest rule.
+
+        The fallback exists because a country's routes share one maintenance
+        basis far more often than not, while the route *labels* do not line up
+        with the rules on their own. The Netherlands is the plain case: its
+        `countries.visa_types` lists `mvv` first, but the MVV and the residence
+        permit are two halves of one application with one set of funds behind
+        them, and the rule is filed under `residence_permit`. Requiring an exact
+        match returned nothing there, and nothing is what the student saw —
+        no figure at all on the single most decision-relevant line in the
+        Funding Studio. The same holds for a student on a secondary route
+        (`pgwp`, `subclass_485`, `opt`) whose funds question is unchanged.
+
+        Callers get the rule's own `visa_type` back in the row, so a surface
+        that needs to say "this is the student-route figure" still can.
+        """
         row = await self._db.fetch_one(
             """SELECT * FROM solvency_rules WHERE country_code = ? AND visa_type = ?
                ORDER BY effective_from DESC LIMIT 1""",
             (country_code, visa_type),
         )
+        if row is None:
+            row = await self._db.fetch_one(
+                """SELECT * FROM solvency_rules WHERE country_code = ?
+                   ORDER BY effective_from DESC, id DESC LIMIT 1""",
+                (country_code,),
+            )
         return dict(row) if row else None
 
     # -- fee reality check ---------------------------------------------------

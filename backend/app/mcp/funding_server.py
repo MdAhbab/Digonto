@@ -192,14 +192,21 @@ async def _compose_budget(ctx: AppContext, args: dict[str, Any]) -> dict[str, An
     tuition_bdt: int | None = None
     if programme and programme.get("tuition_amount"):
         currency = (programme.get("tuition_currency") or "BDT").upper()
-        amount = programme["tuition_amount"]
+        # `programmes.tuition_amount` is in MINOR units (002_profile.sql column
+        # comment): 3850000 is GBP 38,500. `fx_rates.rate` is priced per MAJOR
+        # unit — 152.0 BDT to one pound, not to one penny. Multiplying the two
+        # directly overstated every tuition figure by exactly 100, turning a
+        # GBP 26,800 master's into 40 crore taka. `solvency_rules.amount` is
+        # stored in major units, which is why that conversion below is correct
+        # as written and this one was not; the two tables genuinely differ.
+        amount_major = programme["tuition_amount"] / 100
         if currency == "BDT":
-            tuition_bdt = int(amount)
+            tuition_bdt = round(amount_major)
         else:
             fx = await ctx.budgets.latest_fx_rate(currency, "BDT")
             if fx:
                 fx_rate_used = fx["rate"]
-                tuition_bdt = round(amount * fx_rate_used)
+                tuition_bdt = round(amount_major * fx_rate_used)
             else:
                 notes.append(f"No {currency}->BDT rate on file; tuition left at 0 pending one.")
     if tuition_bdt is None:

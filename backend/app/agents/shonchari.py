@@ -217,9 +217,18 @@ async def compose_report(
     `answer_text = NULL`, and sending 'A: None' to the model produces confusing
     summaries that mention the absence of an answer rather than reviewing the
     ones that were given.
+
+    Each of the two filters below tests the thing it actually depends on, which
+    is not the same thing for both. The transcript needs answer text; the mean
+    needs scores. Gating both on `answered_at` — a timestamp that is incidental
+    to either — meant a scored turn missing that one column dropped out of the
+    average entirely, so a student who answered half the questions perfectly
+    could be handed an overall of 0.0. `record_answer` does write the timestamp
+    with the answer today, but the report should not silently understate a score
+    if that ever stops being true.
     """
-    answered = [t for t in turns if t.get("answered_at") is not None]
-    scored = [t for t in answered if t.get("relevance") is not None]
+    answered = [t for t in turns if t.get("answer_text")]
+    scored = [t for t in turns if t.get("relevance") is not None]
     if scored:
         overall = sum(
             (float(t["relevance"]) + float(t["consistency"]) + float(t["credibility"])) / 3.0

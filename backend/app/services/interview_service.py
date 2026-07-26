@@ -308,7 +308,10 @@ class InterviewService:
                     "contradicts": _safe_json_loads(t.get("contradicts"), []),
                 }
                 for t in turns
-                if t.get("answered_at") is not None
+                # Keyed on the answer itself, matching shonchari.compose_report,
+                # so the breakdown the student reads lists exactly the turns the
+                # overall score was computed from.
+                if t.get("answer_text")
             ],
             "created_at": report["created_at"],
         }

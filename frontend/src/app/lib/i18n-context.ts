@@ -233,6 +233,27 @@ export const dict: Dict = {
   "planner.blocked": { en: "Blocked", bn: "বাধাগ্রস্ত" },
   "planner.loaderror": { en: "Could not load your timeline.", bn: "আপনার সময়রেখা লোড করা যায়নি।" },
   "planner.simulating": { en: "Simulating…", bn: "অনুকরণ হচ্ছে…" },
+  "planner.target.label": { en: "Planning for", bn: "যার জন্য পরিকল্পনা" },
+  "planner.target.none": {
+    en: "No programme is on your plan yet. Choose a destination, then track a programme — the timeline anchors on its deadline.",
+    bn: "আপনার পরিকল্পনায় এখনও কোনো প্রোগ্রাম নেই। একটি গন্তব্য বাছুন, তারপর একটি প্রোগ্রাম অনুসরণ করুন — সময়রেখা তার সময়সীমা ধরে সাজানো হবে।",
+  },
+  "planner.target.choose": { en: "Choose a destination", bn: "গন্তব্য বাছুন" },
+  "planner.target.generic": {
+    en: "Showing a general timeline. Track a programme to anchor it on a real deadline.",
+    bn: "একটি সাধারণ সময়রেখা দেখানো হচ্ছে। বাস্তব সময়সীমা ধরে সাজাতে একটি প্রোগ্রাম অনুসরণ করুন।",
+  },
+  "planner.step.complete": { en: "Mark done", bn: "সম্পন্ন চিহ্নিত করুন" },
+  "planner.step.reopen": { en: "Reopen", bn: "পুনরায় খুলুন" },
+  "planner.step.saving": { en: "Saving…", bn: "সংরক্ষণ হচ্ছে…" },
+  "planner.step.due": { en: "Due", bn: "সময়সীমা" },
+  "planner.regenerate": { en: "Rebuild timeline", bn: "সময়রেখা পুনর্গঠন" },
+  "planner.regenerating": { en: "Rebuilding…", bn: "পুনর্গঠন হচ্ছে…" },
+  "planner.regenerate.note": {
+    en: "Dates are recomputed from your target's deadline. Steps you have completed stay completed.",
+    bn: "আপনার লক্ষ্যের সময়সীমা থেকে তারিখ নতুন করে হিসাব হয়। সম্পন্ন ধাপগুলো সম্পন্নই থাকে।",
+  },
+  "planner.step.source": { en: "Source", bn: "উৎস" },
   "planner.drawer.title": { en: "Change log", bn: "পরিবর্তন তালিকা" },
   "planner.drawer.empty": { en: "No changes yet. Simulate one to see the plan re-flow.", bn: "এখনও কোনো পরিবর্তন নেই। পরিকল্পনা পুনর্বিন্যাস দেখতে একটি অনুকরণ করুন।" },
 
@@ -307,6 +328,53 @@ export const dict: Dict = {
     bn: "আপনার সংক্ষিপ্ত তালিকায় দেশ রাখতে সাইন ইন করুন।",
   },
   "dest.signin.action": { en: "Sign in", bn: "সাইন ইন" },
+
+  // Destinations — journey context and programme browse
+  "dest.programmes.count": { en: "programmes", bn: "প্রোগ্রাম" },
+  "dest.scholarships.count": { en: "scholarships", bn: "বৃত্তি" },
+  "dest.solvency.label": { en: "Bank balance required", bn: "প্রয়োজনীয় ব্যাংক ব্যালেন্স" },
+  "dest.solvency.hold": { en: "held for {days} days", bn: "{days} দিন ধরে রাখতে হবে" },
+  "dest.solvency.provisional": { en: "Provisional", bn: "প্রাথমিক" },
+  "dest.solvency.provisional.why": {
+    en: "Seeded from published guidance. Not yet confirmed against a snapshot of the official page.",
+    bn: "প্রকাশিত নির্দেশিকা থেকে নেওয়া। সরকারি পাতার সংরক্ষিত অনুলিপি মিলিয়ে এখনও নিশ্চিত করা হয়নি।",
+  },
+  "dest.solvency.verified": { en: "Verified against snapshot", bn: "সংরক্ষিত অনুলিপি মিলিয়ে যাচাই করা" },
+  "dest.solvency.source": { en: "Official source", bn: "সরকারি উৎস" },
+  "dest.programmes.show": { en: "View programmes", bn: "প্রোগ্রাম দেখুন" },
+  "dest.programmes.hide": { en: "Hide programmes", bn: "প্রোগ্রাম লুকান" },
+  "dest.programmes.empty": {
+    en: "No programmes are catalogued for this country yet.",
+    bn: "এই দেশের জন্য এখনও কোনো প্রোগ্রাম তালিকাভুক্ত হয়নি।",
+  },
+  "dest.programmes.error": {
+    en: "Could not load programmes for this country.",
+    bn: "এই দেশের প্রোগ্রাম লোড করা যায়নি।",
+  },
+  "dest.programmes.signin": {
+    en: "Sign in to browse programmes and start a plan.",
+    bn: "প্রোগ্রাম দেখতে ও পরিকল্পনা শুরু করতে সাইন ইন করুন।",
+  },
+  "dest.prog.tuition": { en: "Tuition / year", bn: "টিউশন / বছর" },
+  "dest.prog.duration": { en: "Duration", bn: "সময়কাল" },
+  "dest.prog.months": { en: "months", bn: "মাস" },
+  "dest.prog.deadline": { en: "Deadline", bn: "সময়সীমা" },
+  "dest.prog.mincgpa": { en: "Min CGPA", bn: "ন্যূনতম সিজিপিএ" },
+  "dest.prog.minenglish": { en: "Min IELTS", bn: "ন্যূনতম আইইএলটিএস" },
+  "dest.prog.notuition": { en: "No tuition fee", bn: "টিউশন ফি নেই" },
+  "dest.prog.track": { en: "Track this programme", bn: "এই প্রোগ্রাম অনুসরণ করুন" },
+  "dest.prog.tracking": { en: "Adding…", bn: "যোগ করা হচ্ছে…" },
+  "dest.prog.tracked": { en: "Tracked", bn: "অনুসরণ করা হচ্ছে" },
+  "dest.prog.tracked.note": {
+    en: "Added to your plan. The timeline now anchors on this deadline, and the Funding Studio prices this programme.",
+    bn: "আপনার পরিকল্পনায় যোগ হয়েছে। সময়রেখা এখন এই সময়সীমা ধরে সাজানো হবে, এবং ফান্ডিং স্টুডিও এই প্রোগ্রামের খরচ হিসাব করবে।",
+  },
+  "dest.prog.duplicate": {
+    en: "That programme is already on your plan.",
+    bn: "এই প্রোগ্রামটি ইতিমধ্যেই আপনার পরিকল্পনায় আছে।",
+  },
+  "dest.prog.goplan": { en: "Open the Journey Planner", bn: "যাত্রা পরিকল্পনা খুলুন" },
+  "dest.prog.gofunding": { en: "Open the Funding Studio", bn: "ফান্ডিং স্টুডিও খুলুন" },
 
   // Security
   "sec.title": { en: "Security & Ethics", bn: "নিরাপত্তা ও নীতি" },

@@ -95,8 +95,54 @@ class ProfileRepo:
     # -- countries -------------------------------------------------------
 
     async def list_countries(self) -> list[dict[str, Any]]:
+        """Every active country, with the context the destination chooser needs.
+
+        The counts and the solvency rule are joined here rather than fetched per
+        country by the caller. Eight countries is small enough that an N+1 would
+        not have been noticeable in wall-clock terms, but it would have been
+        three round trips per row against a single-writer SQLite file, and the
+        correlated subqueries below cost one statement for the whole page.
+
+        The solvency join picks one headline rule per country, preferring a
+        verified one and then the most recently published. Verified ranks first
+        because a country can hold several routes' rules at once: the UK has
+        both `student` and `graduate` on the same publication date, and ordering
+        by date alone surfaced the seeded, unconfirmed graduate row over the
+        student row that a real snapshot had already confirmed. Showing the
+        weaker of two available figures is the wrong default when the whole
+        point of the flag is to tell the student how much to trust the number.
+
+        This is the headline only. The exact per-visa-type rule is resolved
+        against the student's actual target by `BudgetRepo.solvency_rule` when a
+        budget is composed.
+        """
         rows = await self._db.fetch_all(
-            "SELECT * FROM countries WHERE active = 1 ORDER BY sort_order, name_en"
+            """SELECT c.*,
+                      (SELECT COUNT(*) FROM programmes p
+                         JOIN institutions i ON i.id = p.institution_id
+                        WHERE i.country_code = c.code) AS programme_count,
+                      (SELECT COUNT(*) FROM scholarships sc
+                        WHERE sc.country_code = c.code AND sc.active = 1)
+                        AS scholarship_count,
+                      s.amount        AS solvency_amount,
+                      s.currency      AS solvency_currency,
+                      s.hold_days     AS solvency_hold_days,
+                      s.verified      AS solvency_verified,
+                      s.basis_note_en AS solvency_note_en,
+                      s.basis_note_bn AS solvency_note_bn,
+                      sp.url          AS solvency_source_url,
+                      sp.label        AS solvency_source_label
+                 FROM countries c
+                 LEFT JOIN solvency_rules s
+                        ON s.id = (SELECT r.id FROM solvency_rules r
+                                    WHERE r.country_code = c.code
+                                    ORDER BY r.verified DESC,
+                                             r.effective_from DESC,
+                                             r.id DESC
+                                    LIMIT 1)
+                 LEFT JOIN portals sp ON sp.id = s.source_portal_id
+                WHERE c.active = 1
+                ORDER BY c.sort_order, c.name_en"""
         )
         return [dict(r) for r in rows]
 

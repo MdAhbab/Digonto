@@ -137,10 +137,12 @@ class FundingService:
                 detail_bn="বৃত্তি মেলানোর আগে আপনার প্রোফাইল সম্পূর্ণ করুন।",
             )
         scholarships = await self._scholarships.list_active()
-        scored = []
-        for sc in scholarships:
-            criteria = await self._scholarships.list_criteria(sc["id"])
-            scored.append({**sc, "criteria": criteria})
+        # One statement for every award's criteria, not one per award. See
+        # `ScholarshipRepo.criteria_by_scholarship`.
+        criteria = await self._scholarships.criteria_by_scholarship(
+            [sc["id"] for sc in scholarships]
+        )
+        scored = [{**sc, "criteria": criteria.get(sc["id"], [])} for sc in scholarships]
 
         results = await score_eligibility(profile=profile, scholarships=scored, router=self._router)
 

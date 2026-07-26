@@ -64,14 +64,32 @@ class PlanRepo:
     # -- steps -------------------------------------------------------------
 
     async def list_steps(self, plan_id: int) -> list[dict[str, Any]]:
+        """Every step on a plan, with its citation resolved.
+
+        The snapshot and portal are joined here rather than looked up per step
+        by the service. A timeline is six rows today, but the join costs one
+        statement either way and the alternative is six round trips against a
+        single-writer SQLite file every time the page loads.
+
+        Steps whose `source_snapshot_id` is NULL — every step that is a generic
+        template rather than a country rule — come back with NULLs in the three
+        citation columns, which the service reads as "no citation to show".
+        """
         rows = await self._db.fetch_all(
             # Date order, then template order as the tiebreak for steps sharing a due
             # date or having none. Ordering by `order_idx` alone put a step due in April
             # 2027 above one due in November 2025, because `order_idx` is the position in
             # the template rather than a position in time, and a timeline that is not in
             # time order is not a timeline.
-            """SELECT * FROM plan_steps WHERE plan_id = ?
-                ORDER BY due_at IS NULL, due_at, order_idx""",
+            """SELECT ps.*,
+                      sn.public_id  AS snapshot_public_id,
+                      sn.fetched_at AS snapshot_fetched_at,
+                      po.label      AS snapshot_portal_label
+                 FROM plan_steps ps
+                 LEFT JOIN snapshots sn ON sn.id = ps.source_snapshot_id
+                 LEFT JOIN portals   po ON po.id = sn.portal_id
+                WHERE ps.plan_id = ?
+                ORDER BY ps.due_at IS NULL, ps.due_at, ps.order_idx""",
             (plan_id,),
         )
         return [dict(r) for r in rows]

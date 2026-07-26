@@ -19,7 +19,7 @@ had reacted to a change, but never touches `snapshots` or another user's plan.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.errors import NotFound
 from app.events.bus import EventBus, EventType
@@ -90,9 +90,52 @@ _MONTHS_EN = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ]
 
+# Days added on top of a country's required holding period, so the balance has
+# finished sitting *and* the bank has had time to issue the statement before the
+# visa appointment. A hold that ends the morning of the application is a hold
+# the student cannot yet evidence.
+_SOLVENCY_STATEMENT_MARGIN_DAYS = 14
+
 
 def _month_label(dt: datetime) -> str:
+    """English month label, cached on the row.
+
+    This stays English on purpose and is not what a Bangla reader sees: the
+    client formats the month from `due_at` in the active locale. Storing a
+    localised string would freeze the language at the moment the plan was
+    generated, so a student switching to Bangla would still read "Oct 2026".
+    """
     return f"{_MONTHS_EN[dt.month - 1]} {dt.year}"
+
+
+def _solvency_copy(rule: dict) -> tuple[str, str]:
+    """Describe this country's actual funds requirement, bilingually.
+
+    Falls back to the generic wording when the rule carries no basis note, so a
+    country added later without notes still gets a sensible step rather than an
+    empty description.
+    """
+    amount = f"{rule['amount']:,} {rule['currency']}"
+    hold_days = int(rule["hold_days"] or 0)
+
+    if hold_days > 0:
+        en = (
+            f"Hold {amount} in your account for {hold_days} consecutive days, "
+            f"finishing before your visa application."
+        )
+        bn = (
+            f"আপনার অ্যাকাউন্টে {amount} টানা {hold_days} দিন ধরে রাখুন, "
+            f"ভিসা আবেদনের আগেই যেন তা সম্পূর্ণ হয়।"
+        )
+    else:
+        en = f"Have {amount} available and evidenced before your visa application."
+        bn = f"ভিসা আবেদনের আগে {amount} প্রস্তুত রাখুন এবং তার প্রমাণ রাখুন।"
+
+    if rule.get("basis_note_en"):
+        en = f"{en} {rule['basis_note_en']}"
+    if rule.get("basis_note_bn"):
+        bn = f"{bn} {rule['basis_note_bn']}"
+    return en, bn
 
 
 class PlannerService:
@@ -122,30 +165,73 @@ class PlannerService:
             plan = await self._plans.create(user_id, target_id, intake_label)
         return plan
 
-    async def _deadline_for_target(self, user_id: int, target_public_id: str | None) -> datetime | None:
+    async def _programme_for_target(
+        self, user_id: int, target_public_id: str | None
+    ) -> tuple[dict | None, dict | None]:
+        """The target row and its programme, in two queries rather than four.
+
+        The previous version called `list_targets`, discarded everything but a
+        None check, then called `get_target` again to read the one column it
+        actually needed, then `get_programme`. `get_target` is already scoped to
+        `user_id`, so the ownership check the list was standing in for is the
+        same check, done once.
+        """
         if not target_public_id:
+            return None, None
+        target = await self._targets.get_target(user_id, target_public_id)
+        if target is None:
+            return None, None
+        programme = await self._targets.get_programme(target["programme_id"])
+        return target, programme
+
+    @staticmethod
+    def _deadline_of(programme: dict | None) -> datetime | None:
+        if not programme or not programme.get("deadline_at"):
             return None
-        targets = await self._targets.list_targets(user_id)
-        match = next((t for t in targets if t["public_id"] == target_public_id), None)
-        if match is None:
+        try:
+            return datetime.fromisoformat(programme["deadline_at"].replace("Z", "+00:00"))
+        except ValueError:
             return None
-        programme = await self._targets.get_programme(
-            (await self._targets.get_target(user_id, target_public_id))["programme_id"]
-        )
-        if programme and programme.get("deadline_at"):
-            try:
-                return datetime.fromisoformat(programme["deadline_at"].replace("Z", "+00:00"))
-            except ValueError:
-                return None
-        return None
+
+    async def _solvency_for_target(self, programme: dict | None, target: dict | None) -> dict | None:
+        """The country's real maintenance rule for this target, if there is one.
+
+        This is the piece this module's docstring always claimed to do and never
+        did: `BudgetRepo` was constructed, injected, and never called, so the
+        solvency step used a flat 45-day lead for every destination. The UK
+        requires the balance to sit untouched for 28 consecutive days and
+        Germany's blocked account has no holding period at all; one number
+        cannot be right for both, and being wrong here costs a student the
+        application.
+        """
+        if not programme:
+            return None
+        country_code = programme.get("country_code")
+        if not country_code:
+            return None
+        visa_type = (target or {}).get("visa_type") or ""
+        return await self._budgets.solvency_rule(country_code, visa_type)
 
     async def regenerate(self, user_id: int, target_public_id: str | None) -> dict:
         plan = await self._build_or_get_plan(user_id, target_public_id)
-        deadline = await self._deadline_for_target(user_id, target_public_id)
-        anchor = deadline or (datetime.utcnow() + timedelta(days=270))
+        target, programme = await self._programme_for_target(user_id, target_public_id)
+        deadline = self._deadline_of(programme)
+        anchor = deadline or (datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=270))
+        solvency = await self._solvency_for_target(programme, target)
 
         for idx, tmpl in enumerate(_STEP_TEMPLATES):
-            due = anchor - timedelta(days=tmpl["lead_days"])
+            lead_days = tmpl["lead_days"]
+            desc_en, desc_bn = tmpl["desc_en"], tmpl["desc_bn"]
+            snapshot_id = None
+
+            if tmpl["step_key"] == "solvency" and solvency is not None:
+                # Start the hold early enough that it is complete before the visa
+                # application, plus a margin for the bank to issue the statement.
+                lead_days = int(solvency["hold_days"] or 0) + _SOLVENCY_STATEMENT_MARGIN_DAYS
+                desc_en, desc_bn = _solvency_copy(solvency)
+                snapshot_id = solvency.get("snapshot_id")
+
+            due = anchor - timedelta(days=lead_days)
             await self._plans.upsert_step(
                 plan["id"],
                 step_key=tmpl["step_key"],
@@ -154,12 +240,12 @@ class PlannerService:
                 due_at=due.strftime("%Y-%m-%d"),
                 title_en=tmpl["title_en"],
                 title_bn=tmpl["title_bn"],
-                desc_en=tmpl["desc_en"],
-                desc_bn=tmpl["desc_bn"],
+                desc_en=desc_en,
+                desc_bn=desc_bn,
                 status="upcoming",
                 depends_on=tmpl["depends_on"],
-                lead_days=tmpl["lead_days"],
-                source_snapshot_id=None,
+                lead_days=lead_days,
+                source_snapshot_id=snapshot_id,
             )
         await self._plans.touch(plan["id"])
         await self._bus.publish(
@@ -192,7 +278,18 @@ class PlannerService:
                     "status": s["status"],
                     "due_at": s["due_at"],
                     "depends_on": json.loads(s["depends_on"] or "[]"),
-                    "citation": None,
+                    # A step derived from a country's own published rule carries
+                    # the snapshot it came from. Generic template steps have no
+                    # source and stay uncited rather than borrowing one.
+                    "citation": (
+                        {
+                            "snapshot_id": s["snapshot_public_id"],
+                            "portal": s["snapshot_portal_label"],
+                            "captured": s["snapshot_fetched_at"],
+                        }
+                        if s.get("snapshot_public_id")
+                        else None
+                    ),
                 }
                 for s in steps
             ],
@@ -271,7 +368,7 @@ class PlannerService:
             try:
                 old_due = datetime.strptime(target_step["due_at"], "%Y-%m-%d")
             except (TypeError, ValueError):
-                old_due = datetime.utcnow() + timedelta(days=30)
+                old_due = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=30)
             new_due = old_due - timedelta(days=7)
             await self._plans.upsert_step(
                 plan["id"],

@@ -1003,7 +1003,46 @@ export interface TargetOut {
   created_at: string;
 }
 
+/** One row of `GET /programmes` (app/models/profile.py::ProgrammeOut).
+ *
+ * `tuition_amount` is in MINOR units — 3850000 is GBP 38,500 — matching the
+ * column comment in migration 002. Divide by 100 before display. */
+export interface ProgrammeOut {
+  id: string;
+  institution_id: string;
+  institution_name: string;
+  country_code: string;
+  name: string;
+  degree_level: string;
+  field_of_study: string | null;
+  duration_months: number | null;
+  tuition_amount: number | null;
+  tuition_currency: string | null;
+  intake_months: number[] | null;
+  min_cgpa: number | null;
+  min_english: number | null;
+  deadline_at: string | null;
+  updated_at: string;
+}
+
 // --- destinations (app/models/destination.py) -------------------------------
+
+/** The bank balance a country's student route requires, plus its provenance.
+ *
+ * `verified === false` means the figure was seeded from published guidance and
+ * has not yet been confirmed against a crawled snapshot of `source_url`. The UI
+ * must render it as provisional; see `SolvencySummary` in
+ * app/models/destination.py for why that is not optional. */
+export interface SolvencySummary {
+  amount: number;
+  currency: string;
+  hold_days: number;
+  verified: boolean;
+  note_en: string | null;
+  note_bn: string | null;
+  source_url: string | null;
+  source_label: string | null;
+}
 
 export interface DestinationOut {
   id: string;
@@ -1016,6 +1055,9 @@ export interface DestinationOut {
   visa_types: string[];
   shortlisted: boolean;
   citation: SnapshotCitation | null;
+  programme_count: number;
+  scholarship_count: number;
+  solvency: SolvencySummary | null;
 }
 
 // --- meta --------------------------------------------------------------

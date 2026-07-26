@@ -149,6 +149,37 @@ def _fails_hard_criteria(profile: dict[str, Any], award: dict[str, Any]) -> str 
     return None
 
 
+# How many awards are sent to the model in one scoring call. Chosen so the
+# fenced award block stays well inside `frame_untrusted`'s 12,000-character
+# default rather than being silently truncated by it.
+_MAX_SCORED_AWARDS = 40
+
+
+def _unscored_but_eligible(award: dict[str, Any]) -> dict[str, Any]:
+    """An award the student qualifies for, which fit scoring did not reach.
+
+    Used both when the model call fails and when the candidate set is larger
+    than one call should carry. The student sees the award and the reason it
+    qualified; what is missing is the ranking nuance, and saying so is better
+    than hiding the award.
+    """
+    return {
+        "scholarship_id": award["public_id"],
+        "score": 0.5,
+        "eligible": True,
+        "reasons": [
+            {
+                "criterion_key": "hard_criteria",
+                "met": True,
+                "reason_en": "You meet the stated eligibility rules. "
+                             "Detailed fit scoring is unavailable right now.",
+                "reason_bn": "আপনি ঘোষিত যোগ্যতার শর্ত পূরণ করেন। "
+                             "বিস্তারিত মিল যাচাই এখন করা যাচ্ছে না।",
+            }
+        ],
+    }
+
+
 async def score_eligibility(
     *,
     profile: dict[str, Any],
@@ -182,6 +213,23 @@ async def score_eligibility(
 
     if not eligible:
         return results
+
+    # Bound what reaches the model. The award block was fenced without a
+    # `max_chars`, so it inherited `frame_untrusted`'s 12,000-character default
+    # and would have been cut mid-line once the funding index grew — leaving the
+    # model scoring a truncated list while `eligible` still held every award, so
+    # the tail came back unscored with no indication why. Capping the count
+    # instead makes the boundary explicit and keeps the block comfortably inside
+    # the fence. It also caps the KV cache this call claims, which matters on a
+    # machine already holding a 7.2 GB model resident.
+    #
+    # The overflow is not dropped. Awards past the cap are returned eligible and
+    # unscored, exactly as the exception path below does, on the same reasoning:
+    # missing an award a student qualifies for is the worse failure.
+    overflow = eligible[_MAX_SCORED_AWARDS:]
+    eligible = eligible[:_MAX_SCORED_AWARDS]
+    for award in overflow:
+        results.append(_unscored_but_eligible(award))
 
     profile_summary = (
         f"degree_level={profile.get('degree_level')} "
@@ -224,24 +272,7 @@ async def score_eligibility(
         # Degrade to eligible-with-no-score rather than hiding awards the
         # student qualifies for. Missing an award is the worse failure.
         log.warning("khoji scoring failed, returning unscored eligible set: %s", exc)
-        for award in eligible:
-            results.append(
-                {
-                    "scholarship_id": award["public_id"],
-                    "score": 0.5,
-                    "eligible": True,
-                    "reasons": [
-                        {
-                            "criterion_key": "hard_criteria",
-                            "met": True,
-                            "reason_en": "You meet the stated eligibility rules. "
-                                         "Detailed fit scoring is unavailable right now.",
-                            "reason_bn": "আপনি ঘোষিত যোগ্যতার শর্ত পূরণ করেন। "
-                                         "বিস্তারিত মিল যাচাই এখন করা যাচ্ছে না।",
-                        }
-                    ],
-                }
-            )
+        results.extend(_unscored_but_eligible(award) for award in eligible)
         return results
 
     scored = {r["scholarship_id"]: r for r in data.get("results", [])}

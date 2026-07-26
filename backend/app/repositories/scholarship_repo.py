@@ -58,6 +58,32 @@ class ScholarshipRepo:
         )
         return [dict(r) for r in rows]
 
+    async def criteria_by_scholarship(
+        self, scholarship_ids: list[int]
+    ) -> dict[int, list[dict[str, Any]]]:
+        """Criteria for many awards in one statement.
+
+        `rematch` used to call `list_criteria` once per award. At six seeded
+        awards that was seven queries and invisible; the funding index is meant
+        to grow, and at a few hundred awards it is a few hundred round trips
+        against a single-writer SQLite file, per student, on every rematch.
+
+        Returns a dict keyed by scholarship id, with an empty list for awards
+        that have no criteria rows, so callers never have to test for a missing
+        key.
+        """
+        if not scholarship_ids:
+            return {}
+        placeholders = ",".join("?" for _ in scholarship_ids)
+        rows = await self._db.fetch_all(
+            f"SELECT * FROM scholarship_criteria WHERE scholarship_id IN ({placeholders})",
+            tuple(scholarship_ids),
+        )
+        grouped: dict[int, list[dict[str, Any]]] = {sid: [] for sid in scholarship_ids}
+        for row in rows:
+            grouped[row["scholarship_id"]].append(dict(row))
+        return grouped
+
     # -- ranked matches (student-facing) --------------------------------
 
     async def list_matches_for_user(

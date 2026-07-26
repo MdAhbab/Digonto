@@ -17,7 +17,7 @@ from app.db.connection import Databases
 from app.deps import RateLimit, get_bus, get_current_user, get_dbs, get_optional_user
 from app.events.bus import EventBus
 from app.models.common import Page
-from app.models.destination import DestinationOut
+from app.models.destination import DestinationOut, SolvencySummary
 from app.models.profile import ProgrammeOut
 from app.repositories.profile_repo import ProfileRepo
 from app.repositories.target_repo import TargetRepo
@@ -50,6 +50,19 @@ def destination_from_row(row: Mapping[str, Any]) -> DestinationOut:
         except ValueError:
             visa_types = None
 
+    solvency = None
+    if row.get("solvency_amount") is not None:
+        solvency = SolvencySummary(
+            amount=row["solvency_amount"],
+            currency=row["solvency_currency"],
+            hold_days=row["solvency_hold_days"] or 0,
+            verified=bool(row.get("solvency_verified")),
+            note_en=row.get("solvency_note_en"),
+            note_bn=row.get("solvency_note_bn"),
+            source_url=row.get("solvency_source_url"),
+            source_label=row.get("solvency_source_label"),
+        )
+
     return DestinationOut(
         id=row["code"],
         name_en=row["name_en"],
@@ -61,6 +74,9 @@ def destination_from_row(row: Mapping[str, Any]) -> DestinationOut:
         visa_types=list(visa_types or []),
         shortlisted=bool(row.get("shortlisted", False)),
         citation=None,
+        programme_count=row.get("programme_count") or 0,
+        scholarship_count=row.get("scholarship_count") or 0,
+        solvency=solvency,
     )
 
 
