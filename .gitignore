@@ -1,0 +1,83 @@
+# ---------------------------------------------------------------------------
+# LaTeX: the paper source is not published from this repository.
+# The Overleaf drag-and-drop package lives in docs/paper/ and stays local.
+# ---------------------------------------------------------------------------
+*.tex
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+*.toc
+*.pdf
+
+# ---------------------------------------------------------------------------
+# Internal notes. This repository is public. Anything here must never be
+# committed. See backend/backend.md section 9 for the public-safe summary.
+# ---------------------------------------------------------------------------
+backend/backend.internal.md
+*.internal.md
+
+# ---------------------------------------------------------------------------
+# Secrets and configuration
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+age.key
+
+# ---------------------------------------------------------------------------
+# Runtime data: databases, vault documents, archived page snapshots.
+# Vault contents are student passports and bank statements. Never commit these.
+# ---------------------------------------------------------------------------
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+snapshots/
+vault/
+qdrant_storage/
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+*.gguf
+*.safetensors
+adapters/
+checkpoints/
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# ---------------------------------------------------------------------------
+# Node and frontend
+# ---------------------------------------------------------------------------
+node_modules/
+dist/
+.vite/
+*.local
+
+# ---------------------------------------------------------------------------
+# Editors and operating system
+# ---------------------------------------------------------------------------
+.DS_Store
+.idea/
+.vscode/
+*.swp
