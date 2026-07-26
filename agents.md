@@ -5,7 +5,21 @@ constrained to a schema (Ollama's structured-output mode, not native function
 calling and not a hand-written parser over free text), served locally through
 Ollama's OpenAI-compatible API. A shared helper (`app/agents/runtime.py`)
 validates every reply against its schema and retries once, with the
-validation error fed back, if it fails to validate. Agents are called
+validation error fed back, if it fails to validate. Validation walks the whole
+schema — types, nested `required`, `enum` membership, array `items`, numeric
+bounds — not just the presence of top-level keys, so a reply like
+`{"findings": "none"}` where a list of objects was specified fails at the agent
+boundary rather than several layers away.
+
+**Untrusted text is fenced, and the fence cannot be escaped.** Portal pages,
+uploaded documents, and student-typed text all reach a model here, and any of it
+can contain something shaped like an instruction. `app/security/framing.py` wraps
+each such block in a delimiter carrying a per-call random nonce, so a page
+containing a literal end tag cannot close its own block and continue as top-level
+instruction; anything fence-shaped in the payload is stripped as well. The
+matching data-only instruction is appended to the system prompt automatically
+whenever a fence is present, so a frame can never ship without the rule that
+makes it mean something. Agents are called
 directly by the service or worker that owns the moment they run (the diff
 worker calls Porter, `vault_service.py` calls Prohori/Bicharok/Lekhok/Dalil,
 `funding_service.py` calls Khoji, `interview_service.py` calls Shonchari), not
@@ -22,7 +36,7 @@ a current capability.
 
 Custom tools are exposed to the model two ways: internal tools (direct async Python functions) and **MCP servers** (Model Context Protocol, an open standard that lets a model discover and call external tools over a uniform interface). Digonto ships three custom MCP servers so the same tools are reusable from any MCP client, including Claude Code during development:
 
-- **`digonto-portal-mcp`:** `fetch_snapshot`, `diff_snapshots`, `list_watched_portals`, `register_portal`
+- **`digonto-portal-mcp`:** `fetch_snapshot`, `diff_snapshots`, `list_watched_portals`, `register_portal`, `search_official_sources`, `watch_official_sources`
 - **`digonto-vault-mcp`:** `list_documents`, `read_doc_metadata`, `extract_fields` (OCR + Gemma vision pass), `flag_document` (no delete tool exists)
 - **`digonto-funding-mcp`:** `search_scholarships`, `get_fx_rate`, `get_solvency_rules`, `compose_budget`, `get_fee_benchmarks`
 
@@ -33,6 +47,13 @@ Custom tools are exposed to the model two ways: internal tools (direct async Pyt
 **Purpose:** no student should learn about a deadline change after it matters.
 
 **Trigger:** `portal.changed` event from the recurrent crawl loop, consumed by the diff worker (`app/workers/differ.py`). A daily sweep was part of the original design; only the event-driven path is built today.
+
+**What Porter watches.** 31 official sources are seeded as production data by migration `015_portal_registry.sql` (embassies, immigration ministries, scholarship bodies, Bangladesh Bank and UGC, IELTS/TOEFL) across the eight destination countries plus six globally-applicable sources. Until that migration existed, `portals` was populated only by `seed_demo.py`, so a production deployment watched nothing at all and the entire recurrent loop had no inputs.
+
+The registry grows two ways, both bounded:
+
+- **Same-site expansion.** A registered URL is an entry point, not a document: `gov.uk/student-visa` is an index whose real content is one click down. The crawler follows up to 8 relevance-filtered links on the same registrable domain, one level deep, and registers each as its own portal (`016_portal_discovery.sql`) so a citation still resolves to the exact page it came from. robots.txt and the per-host throttle apply to every child.
+- **Search-driven discovery.** When a question is refused for want of a source, `app/workers/discovery.py` searches the open web and registers only results on an official-domain allowlist. Nothing found by search is ever handed to the model as context: a result contributes a URL, which is crawled, hashed, snapshotted, and embedded like any other source, so the Truth Ledger guarantee holds by construction. Aggregators, forums, blogs, and consultancy pages are excluded by an explicit blocklist, because those are precisely the confidently-wrong sources this product exists to replace.
 
 **Tools:** `digonto-portal-mcp.diff_snapshots`, internal `find_affected_students(portal_id)`, internal `classify_change(diff)` (Gemma call with enum output: deadline, fee, document_requirement, policy, cosmetic), internal `send_alert(student_id, payload)`, internal `update_timeline(student_id, change)`.
 

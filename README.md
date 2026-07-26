@@ -50,7 +50,10 @@ pending work in it.
    quoted sentence highlighted and the timestamp it was captured.
 2. **Ask something no source covers.** It refuses and says which portals it is
    watching, instead of inventing a number. That behaviour is the point of the
-   system, not a limitation of it.
+   system, not a limitation of it. The refusal is also a trigger: it sends Porter
+   looking for the official page that would have answered, so the same question
+   is answerable next time. A refusal is the system noticing a gap, not shrugging
+   at one.
 3. **Journey Planner** — press *Simulate a portal change*. A step re-plans, the
    dependent steps move with it, and the drawer explains what changed and cites
    the source. The response is labelled `simulated` so it is never mistaken for
@@ -90,10 +93,19 @@ answers in clear Bangla with a citation for every claim.
 ## What Digonto is not
 
 Not a chatbot with a knowledge base attached. The conversational surface is one
-page out of twelve. The value comes from automation: portals are crawled and
-diffed on a schedule, changes become events, events update a versioned knowledge
-store, agents act on the student's behalf, and the model itself improves from
-real corrections behind two promotion gates.
+page out of twelve. The value comes from automation: 31 official portals are
+crawled and diffed on a schedule, changes become events, events update a versioned
+knowledge store, agents act on the student's behalf, and the model itself improves
+from real corrections behind two promotion gates.
+
+The watch list is not a fixed list either. The crawler follows links inside each
+source, and a question nobody could answer sends it searching for the official
+page that would answer it. Search is constrained to an allowlist of government,
+embassy, university, and named-scholarship domains, and nothing it finds is ever
+shown to the model directly: a search result contributes a URL, which is crawled
+and snapshotted like any other source before it can be cited. Aggregators, forums
+and consultancy pages are excluded outright, since those are the confidently-wrong
+sources this exists to replace.
 
 ---
 
@@ -152,6 +164,18 @@ flowchart TD
     EV --> C4[Bangla alert<br/>quoting the changed sentence]
 ```
 
+And the reverse edge, which is what stops a refusal being a dead end:
+
+```mermaid
+flowchart LR
+    RF["refusal: no source covers this"] --> S[Search official domains only]
+    S --> AL{On the allowlist?}
+    AL -- no --> DROP[Discarded]
+    AL -- yes --> W[Register as a watched portal]
+    W --> CR[Crawl, hash, snapshot, embed]
+    CR --> A[The next student gets a cited answer]
+```
+
 ---
 
 ## Why Gemma 4 E2B
@@ -189,7 +213,7 @@ Specifications, tool schemas, and MCP servers in [`agents.md`](agents.md).
 
 | Agent | Role |
 |---|---|
-| **পোর্টার** Porter | Watches portals. Classifies each change, discards wording-only edits, alerts affected students with the changed passage quoted and cited. |
+| **পোর্টার** Porter | Watches 31 official portals. Classifies each change, discards wording-only edits, alerts affected students with the changed passage quoted and cited. Grows its own watch list: it follows links inside a source, and when a question has no answer it searches for the official page that would answer it. |
 | **প্রহরী** Prohori | Audits the document vault against each target's real checklist. Flags missing, expiring, and inconsistent documents, and drafts request letters. |
 | **খোঁজি** Khoji | Matches the profile against a funding index, with a reason for every criterion, and builds a complete budget including the bank balance the embassy actually requires. |
 | **সঞ্চারী** Shonchari | Runs mock visa interviews conditioned on the student's own file, scoring answers for consistency with their documents, which is what a visa officer checks. |
@@ -336,8 +360,9 @@ wording. Shonchari coaches truthful presentation only and refuses requests to
 misrepresent facts, explaining the legal consequences of visa fraud.
 
 **Privacy and security.** Inference is self-hosted, so passports and bank
-statements never leave the deployment. Vault files are encrypted at rest with
-per-user keys. The training buffer physically cannot store unconsented or
+statements never leave the deployment. Vault files are encrypted at rest with a
+per-document random key, itself wrapped with a per-user key derived by HKDF from
+the deployment secret, so one user's wrapping key cannot open another's documents. The training buffer physically cannot store unconsented or
 un-scrubbed data: it is a `CHECK` constraint, not a policy. Full export and hard
 delete, with deletion cascading to files.
 

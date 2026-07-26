@@ -51,14 +51,14 @@ second runtime.
 | Reverse proxy | nginx, on the host, not in the container stack | automatic TLS for digonto.ahbab.dev via certbot, and response buffering turned off on the streaming routes so tokens are not held back |
 | Deployment | Docker Compose on the cloud VM | single-file reproducible deploy |
 
-`requirements.txt` still pins `arq`, but nothing under `app/workers` imports it:
-the worker process (`app/workers/main.py`) runs the crawl schedule, the diff
-and embed consumers, and the nightly retention and periodic learning jobs as
+`arq` is no longer pinned. Nothing under `app/workers` ever imported it: the
+worker process (`app/workers/main.py`) runs the crawl schedule, the diff, embed,
+and discovery consumers, and the nightly retention and periodic learning jobs as
 plain asyncio tasks over `EventBus.consume` (Redis Streams, at-least-once
 delivery, idempotent via `applied_events`) plus APScheduler for cron timing.
-Reaching for `arq` as well would stand up a second, incompatible job queue
-next to the bus this build already has. Drop the pin the next time
-`requirements.txt` is touched.
+Standing up a second, incompatible job queue next to the bus this build already
+has would have been pure surface area, so the pin was dropped rather than
+adopted.
 
 The retrieval pipeline itself lives in `app/rag/` (`pipeline.py`,
 `retrieval.py`, `cache.py`, `embeddings.py`): hybrid dense-plus-BM25 search
@@ -156,8 +156,20 @@ gain is worth the extra tokens. Make it a per-call flag, never a global setting.
 
 ### 3.2 Recurrent loop, scheduled
 
+- The watched-portal registry is production data, seeded by migration
+  `015_portal_registry.sql`: 31 official sources across the eight destination
+  countries plus six globally-applicable ones. This was previously seeded only by
+  `seed_demo.py`, which does not run in production, so a real deployment watched
+  zero portals and every stage below it had no input.
 - Crawler worker fetches each registered portal on a per-source cron (embassies
   every 6 h, universities daily, scholarships daily).
+- A registered URL is an entry point, not a document. The crawler follows up to
+  `MAX_CHILD_PAGES` relevance-filtered links on the same registrable domain, one
+  level deep, and registers each as its own portal (`016_portal_discovery.sql`).
+  Registering rather than folding them into the parent is what keeps citations
+  correct: `snapshots` carries no URL of its own, so a snapshot's URL *is* its
+  portal's URL. Only curated roots are expanded, which caps depth without a
+  counter, and only when the page actually changed.
 - Snapshots are stored on the encrypted volume by content hash. If the hash is
   unchanged, stop. This is the cheap path and it is the common one.
 - Diff worker computes passage-level diffs and emits `kb.chunk.updated` per
@@ -168,6 +180,16 @@ gain is worth the extra tokens. Make it a per-call flag, never a global setting.
   (Truth Ledger).
 - Cache invalidator drops semantic cache entries whose citations point at
   superseded snapshots.
+- **The loop closes.** A question refused for want of a source publishes
+  `answer.generated` with `is_refusal`, which the discovery consumer
+  (`app/workers/discovery.py`) turns into a web search for the source that would
+  have answered it, registering only results on an official-domain allowlist.
+  Without this the refusal was a dead end: the same question refused forever
+  unless a human noticed. Nothing found by search reaches the model as context —
+  a result contributes a URL, which then goes through this same crawl, snapshot,
+  and embed path — so grounding is preserved by construction rather than by
+  discipline. Rate limited to `MAX_DISCOVERIES_PER_HOUR`, and skipped rather than
+  queued past it, since the next student to ask re-triggers it.
 
 ### 3.3 Continual loop, periodic
 
@@ -195,7 +217,32 @@ gain is worth the extra tokens. Make it a per-call flag, never a global setting.
    country). TTL 7 days, invalidated by events, never served across KB versions.
 3. **Inference-side cache:** Ollama `keep_alive` pinned so the model stays
    resident in RAM, and a stable system prefix (system prompt plus tool schemas)
-   so prefix reuse applies. Embedding cache in Redis keyed by text hash.
+   so prefix reuse applies. Embedding cache in Redis keyed by text hash — this
+   requires the `Embedder` to actually be given the Redis client, which the ask
+   path was not doing, silently disabling the cache for every question.
+
+### 4.1 Context window is pinned per task, not left to the server
+
+`gemma4:e2b` advertises 131,072 tokens, and the KV cache for a window that size
+is larger than the weights. Leaving `num_ctx` unset made the memory footprint on
+the VM whatever the Ollama build happened to default to. It is now set per
+`TaskKind` (`app/llm/router.py`): 8192 for grounded answering, agent work, vision,
+and scoring; 4096 for change classification; 2048 for chrome. Ollama sizes the KV
+cache from the largest window it is asked for, so the ceiling matters more than
+the average.
+
+`OLLAMA_NUM_PARALLEL` is 1, not 2. Ollama allocates a KV cache per parallel slot,
+so 2 doubled cache memory for no throughput gain on a CPU-only box where decode
+is memory-bandwidth bound and two concurrent generations simply halve each
+other's speed. `OLLAMA_MAX_LOADED_MODELS` stays 2 because `gemma4:e2b` and
+`bge-m3` are both on the hot path of a single question and evicting one to load
+the other would thrash on every query. Flash attention and a `q8_0` KV cache buy
+back roughly half the cache memory, which is what makes two resident models fit.
+
+SQLite's `cache_size` is per connection and is not shared: at the previous 64 MB
+across 13 connections it could claim ~832 MB on a machine budgeted around a
+resident 7.2 GB model. It is now 8 MB per connection (~104 MB total), which is
+ample for databases that hold metadata only, since rule 4 above keeps blobs out.
 
 ## 5. API surface (original contract sketch, superseded)
 
@@ -263,9 +310,23 @@ back. A second failure escalates per section 9.
   names, passport numbers, account numbers). Consent flag checked at write time.
 - Full export and hard delete endpoints. Deletion cascades to files on the
   volume and to buffer rows, and is recorded as an event.
-- Prompt-injection defence for crawled content: retrieved passages are wrapped in
-  a data-only frame, tool calling is disabled during grounded answering, and
-  agents treat portal text as untrusted input.
+- Vault files are encrypted with a per-document random DEK, and the DEK is wrapped
+  with a **per-user** key derived by HKDF-SHA256 from `VAULT_MASTER_KEY`
+  (`app/security/vault_crypto.py`). This previously used one global
+  `sha256(VAULT_MASTER_KEY)` for every user, which was weaker than the README
+  claimed and invisible from the outside. `unwrap_dek` falls back to the legacy
+  key so documents written under the old scheme stay readable; the fallback is
+  transitional and safe because AES-GCM authenticates, so it can only succeed on
+  a blob that genuinely was wrapped that way.
+- Prompt-injection defence for crawled content: retrieved passages and every
+  agent's untrusted input are wrapped in a data-only frame whose delimiter carries
+  a **per-call random nonce** (`app/security/framing.py`), tool calling is
+  disabled during grounded answering, and agents treat portal text as untrusted
+  input. The nonce is the load-bearing part: a fixed delimiter is escapable by a
+  page that contains its own terminator, which is exactly what a hostile or
+  careless portal page can do. Porter's change classifier is the highest-risk
+  path, since a page that could talk its way to `cosmetic` would silence a real
+  deadline alert for every affected student.
 
 ## 8. Model sizing: does a bigger model respond faster?
 
