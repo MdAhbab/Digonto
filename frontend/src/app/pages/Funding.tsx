@@ -8,6 +8,7 @@ import {
   api,
   qs,
   ApiError,
+  type CoverageType,
   type ScholarshipOut,
   type SortKey,
   type SortOrder,
@@ -38,6 +39,50 @@ const SORT_COLUMNS: readonly [SortKey, string][] = [
   ["coverage", "funding.col.amount"],
   ["deadline", "funding.col.deadline"],
 ];
+
+/** What an award is worth, formatted with the unit it is actually in.
+ *
+ * The previous version printed `${s.coverage}%`, where `coverage` was populated from
+ * `scholarships.amount`, a money value. A 1,500,000 BDT award was therefore displayed
+ * as "1500000%" while the awards with no recorded amount showed an em dash, which made
+ * the column read as though most scholarships cover nothing and a few cover fifteen
+ * thousand times the cost.
+ *
+ * `coverage_type` is what the column was reaching for and is shown when there is no
+ * figure, because "full" or "tuition only" is more use to a student than a blank.
+ */
+function formatAward(
+  s: { amount: number | null; currency: string | null; coverage_type: CoverageType | null },
+  lang: string,
+): string {
+  const typeLabel: Record<CoverageType, { en: string; bn: string }> = {
+    full: { en: "Full", bn: "সম্পূর্ণ" },
+    partial: { en: "Partial", bn: "আংশিক" },
+    tuition_only: { en: "Tuition only", bn: "শুধু টিউশন" },
+    stipend_only: { en: "Stipend only", bn: "শুধু উপবৃত্তি" },
+    travel: { en: "Travel", bn: "ভ্রমণ" },
+  };
+  const kind = s.coverage_type ? typeLabel[s.coverage_type][lang === "bn" ? "bn" : "en"] : null;
+
+  if (s.amount === null || s.amount <= 0) return kind ?? "—";
+
+  // `Intl` handles the grouping separators for both locales, and falls back to a
+  // plain grouped number when the currency code is missing or not one it knows.
+  const locale = lang === "bn" ? "bn-BD" : "en-GB";
+  let money: string;
+  try {
+    money = s.currency
+      ? new Intl.NumberFormat(locale, {
+          style: "currency",
+          currency: s.currency,
+          maximumFractionDigits: 0,
+        }).format(s.amount)
+      : new Intl.NumberFormat(locale).format(s.amount);
+  } catch {
+    money = `${new Intl.NumberFormat(locale).format(s.amount)}${s.currency ? ` ${s.currency}` : ""}`;
+  }
+  return kind ? `${money} · ${kind}` : money;
+}
 
 export function Funding() {
   const { t, lang } = useI18n();
@@ -344,7 +389,7 @@ export function Funding() {
                     <tr key={s.id} className="border-b border-[var(--hairline)] last:border-0 hover:bg-secondary/20">
                       <td className="px-5 py-3.5 font-serif">{s.name}</td>
                       <td className="px-5 py-3.5 text-muted-foreground">{s.country ?? "—"}</td>
-                      <td className="px-5 py-3.5 font-mono">{s.coverage !== null ? `${s.coverage}%` : "—"}</td>
+                      <td className="px-5 py-3.5 font-mono">{formatAward(s, lang)}</td>
                       <td className="px-5 py-3.5 font-mono text-muted-foreground">{s.deadline ?? "—"}</td>
                       <td className="px-5 py-3.5">
                         {!s.verified && (

@@ -65,7 +65,14 @@ class PlanRepo:
 
     async def list_steps(self, plan_id: int) -> list[dict[str, Any]]:
         rows = await self._db.fetch_all(
-            "SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY order_idx", (plan_id,)
+            # Date order, then template order as the tiebreak for steps sharing a due
+            # date or having none. Ordering by `order_idx` alone put a step due in April
+            # 2027 above one due in November 2025, because `order_idx` is the position in
+            # the template rather than a position in time, and a timeline that is not in
+            # time order is not a timeline.
+            """SELECT * FROM plan_steps WHERE plan_id = ?
+                ORDER BY due_at IS NULL, due_at, order_idx""",
+            (plan_id,),
         )
         return [dict(r) for r in rows]
 
@@ -91,11 +98,24 @@ class PlanRepo:
         depends_on: list[str],
         lead_days: int,
         source_snapshot_id: int | None,
+        keep_status: bool = True,
     ) -> None:
+        """Create or update one step, keyed by `step_key`.
+
+        `keep_status` defaults to True, and that is the fix for a data-loss bug rather
+        than a preference. `existing` already selected `status` and then discarded it,
+        so every regenerate wrote the caller's status over the stored one. The planner
+        passes `status="upcoming"` for every template step, which meant pressing
+        "regenerate" marked a student's completed IELTS and submitted applications as
+        not yet started. Dates and wording are the plan's to recompute; what the student
+        has actually finished is not.
+        """
         existing = await self._db.fetch_one(
             "SELECT id, status FROM plan_steps WHERE plan_id = ? AND step_key = ?",
             (plan_id, step_key),
         )
+        if existing is not None and keep_status:
+            status = existing["status"]
         depends_json = json.dumps(depends_on)
         if existing is None:
             public_id = new_ulid()

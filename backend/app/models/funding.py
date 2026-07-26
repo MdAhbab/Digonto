@@ -41,7 +41,14 @@ class ScholarshipOut(BaseModel):
     id: str
     name: str
     country: str | None = None
-    coverage: int | None = None
+    # What the award is worth, and what kind of award it is. These used to be a single
+    # `coverage: int` populated from `scholarships.amount`, which is a money value; the
+    # funding table rendered it with a percent sign and reported a 1,500,000 BDT award
+    # as "1500000%". A number whose unit is not carried alongside it will eventually be
+    # printed with the wrong unit, so the unit travels with it now.
+    amount: int | None = None
+    currency: str | None = None
+    coverage_type: CoverageType | None = None
     deadline: str | None = None
     score: float
     rank: int
@@ -55,9 +62,6 @@ class ScholarshipDetail(ScholarshipOut):
     model_config = ConfigDict(populate_by_name=True)
 
     provider: str
-    coverage_type: CoverageType | None = None
-    amount: int | None = None
-    currency: str | None = None
     url: str
 
 

@@ -8,7 +8,40 @@ import { Link } from "react-router";
 import { Seo, SEO_ROUTES } from "../lib/seo";
 import { api, uploadDocument, ApiError, type DocumentOut, type DocumentKind } from "../lib/api";
 
-const sevColor = { ok: "var(--gold)", warn: "var(--amber-status)", error: "var(--destructive)" } as const;
+const sevColor = { ok: "var(--primary)", warn: "var(--amber-status)", error: "var(--destructive)" } as const;
+
+/* Expiry thresholds, in days.
+ *
+ * The badge used to appear for every document that had an expiry date at all, so a
+ * passport valid for another year and a half was labelled "EXPIRES · 550D" beside one
+ * with 45 days left, and neither stood out. A date far enough away is not a warning,
+ * it is just a date, and it belongs in the detail panel rather than on the shelf.
+ *
+ * Its colour also came from `severity`, which is the *audit* verdict on the document,
+ * not its expiry. That is why 300 days showed red while 45 days showed gold: the
+ * colours were describing something other than the number printed next to them. The
+ * badge now derives its own colour from its own number. */
+const EXPIRY_NOTICE_DAYS = 180;
+const EXPIRY_URGENT_DAYS = 30;
+const EXPIRY_WARN_DAYS = 90;
+
+function expiryBadge(
+  days: number | null,
+): { label: (t: (k: string) => string) => string; colour: string } | null {
+  if (days === null || days > EXPIRY_NOTICE_DAYS) return null;
+  if (days < 0) {
+    // Already expired. Previously rendered as a negative day count, which reads as a
+    // rendering fault rather than as the most urgent thing on the page.
+    return { label: (t) => t("vault.expired"), colour: "var(--destructive)" };
+  }
+  const colour =
+    days <= EXPIRY_URGENT_DAYS
+      ? "var(--destructive)"
+      : days <= EXPIRY_WARN_DAYS
+        ? "var(--amber-status)"
+        : "var(--muted-foreground)";
+  return { label: (t) => `${t("vault.expires")} · ${days}d`, colour };
+}
 
 const KIND_OPTIONS: DocumentKind[] = [
   "passport",
@@ -250,7 +283,7 @@ export function Vault() {
           {!loading && !loadError && docs.length > 0 && (
             <div className="grid gap-px overflow-hidden rounded-[4px] border border-[var(--hairline)] bg-[var(--hairline)] sm:grid-cols-2">
               {docs.map((d) => {
-                const tilt = d.expiresDays !== null ? Math.max(0, (120 - d.expiresDays) / 30) : 0;
+                const badge = expiryBadge(d.expiresDays);
                 const scanning = d.status === "scanning" || d.status === "uploaded";
                 return (
                   <button
@@ -262,12 +295,12 @@ export function Vault() {
                   >
                     <div className="flex items-start justify-between">
                       <FolderClosed className="size-6 text-primary" />
-                      {d.expiresDays !== null && (
+                      {badge && (
                         <span
                           className="inline-flex items-center gap-1 font-mono text-[0.62rem] uppercase tracking-wider"
-                          style={{ color: sevColor[d.severity], transform: `rotate(${tilt * 3}deg)` }}
+                          style={{ color: badge.colour }}
                         >
-                          {t("vault.expires")} · {d.expiresDays}d
+                          {badge.label(t)}
                         </span>
                       )}
                     </div>

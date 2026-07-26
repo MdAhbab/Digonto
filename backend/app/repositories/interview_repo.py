@@ -18,9 +18,33 @@ class InterviewRepo:
 
     # -- question bank ---------------------------------------------------
 
+    # How one session's questions are split across the three tiers. A session has to
+    # escalate to be practice: ordering the whole bank by difficulty and taking the
+    # first N meant the limit was exhausted by openings and standards, so the pressure
+    # questions, which are the ones a student actually needs to rehearse, were never
+    # asked. Fractions of the limit rather than fixed counts, so a shorter session
+    # still contains a hard question.
+    _TIER_SHARE = (("opening", 0.25), ("standard", 0.5), ("pressure", 0.25))
+
     async def pick_questions(
         self, country_code: str | None, visa_type: str | None, limit: int = 8
     ) -> list[dict[str, Any]]:
+        """One session's questions: stratified by difficulty, varied between sessions.
+
+        Two things this deliberately does that the previous single query did not.
+
+        It guarantees a hard question. See `_TIER_SHARE`.
+
+        It varies between sessions. The old query was fully deterministic, so a student
+        practising three times was asked the same eight questions in the same order and
+        was rehearsing a script rather than preparing for an interview. Selection is now
+        random within each tier.
+
+        Country-specific questions are preferred over general ones inside a tier,
+        because a question about the applicant's own destination is worth more than a
+        generic one, but general questions still fill the tier when a destination has
+        few or none of its own.
+        """
         clauses = []
         params: list[Any] = []
         if country_code:
@@ -30,13 +54,40 @@ class InterviewRepo:
             clauses.append("(visa_type = ? OR visa_type IS NULL)")
             params.append(visa_type)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        rows = await self._db.fetch_all(
-            f"""SELECT * FROM interview_bank {where}
-                ORDER BY CASE difficulty WHEN 'opening' THEN 0 WHEN 'standard' THEN 1 ELSE 2 END
-                LIMIT ?""",
-            (*params, limit),
-        )
-        return [dict(r) for r in rows]
+
+        picked: list[dict[str, Any]] = []
+        for tier, share in self._TIER_SHARE:
+            # At least one from every tier, whatever the limit and the rounding.
+            want = max(1, round(limit * share))
+            tier_clause = f"{where} AND difficulty = ?" if where else "WHERE difficulty = ?"
+            rows = await self._db.fetch_all(
+                f"""SELECT * FROM interview_bank {tier_clause}
+                     ORDER BY (country_code IS NULL), RANDOM()
+                     LIMIT ?""",
+                (*params, tier, want),
+            )
+            picked.extend(dict(r) for r in rows)
+
+        # A thin tier (a destination with no pressure questions of its own and a small
+        # general pool) would leave the session short, so the remainder is topped up
+        # from anything not already chosen, still hardest-last.
+        if len(picked) < limit:
+            have = {r["id"] for r in picked}
+            rows = await self._db.fetch_all(
+                f"""SELECT * FROM interview_bank {where}
+                     ORDER BY RANDOM() LIMIT ?""",
+                (*params, limit * 2),
+            )
+            for r in rows:
+                if r["id"] not in have:
+                    picked.append(dict(r))
+                    have.add(r["id"])
+                if len(picked) >= limit:
+                    break
+
+        order = {"opening": 0, "standard": 1, "pressure": 2}
+        picked.sort(key=lambda r: order.get(r["difficulty"], 1))
+        return picked[:limit]
 
     # -- sessions -------------------------------------------------------
 

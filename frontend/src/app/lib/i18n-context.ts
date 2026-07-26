@@ -92,6 +92,62 @@ export const dict: Dict = {
   "del.banner.cancelling": { en: "Cancelling", bn: "বাতিল করা হচ্ছে" },
   "del.cancelled": { en: "Your account will not be deleted.", bn: "আপনার অ্যাকাউন্ট মুছে ফেলা হবে না।" },
 
+  // Profile page. GET/PATCH /me/profile existed from the first build and nothing in the
+  // interface reached them, so the fields every agent reasons from could only be set by
+  // the demo seed. Each hint says what the field is used for: "why does it want this" is
+  // the question that stops people filling forms in.
+  "nav.profile": { en: "Your profile", bn: "আপনার প্রোফাইল" },
+  "profile.eyebrow": { en: "Your details", bn: "আপনার তথ্য" },
+  "profile.title": { en: "What Digonto knows about you", bn: "দিগন্ত আপনার সম্পর্কে যা জানে" },
+  "profile.sub": {
+    en: "Every field is optional. The more you fill in, the more specific your answers, scholarship matches and interview practice become.",
+    bn: "প্রতিটি ঘর ঐচ্ছিক। যত বেশি পূরণ করবেন, আপনার উত্তর, বৃত্তির মিল ও সাক্ষাৎকারের অভ্যাস তত বেশি নির্দিষ্ট হবে।",
+  },
+  "profile.unset": { en: "Not answered", bn: "দেওয়া হয়নি" },
+  "profile.sec.you": { en: "You", bn: "আপনি" },
+  "profile.sec.study": { en: "Your studies", bn: "আপনার পড়াশোনা" },
+  "profile.sec.english": { en: "English test", bn: "ইংরেজি পরীক্ষা" },
+  "profile.sec.plan": { en: "Your plan", bn: "আপনার পরিকল্পনা" },
+  "profile.name": { en: "Name", bn: "নাম" },
+  "profile.name.hint": { en: "How the interview room and your documents address you.", bn: "সাক্ষাৎকার কক্ষ ও আপনার নথিতে আপনাকে যেভাবে সম্বোধন করা হবে।" },
+  "profile.district": { en: "Home district", bn: "নিজ জেলা" },
+  "profile.district.hint": { en: "Used only for load-shedding aware reminders. Never shared.", bn: "কেবল লোডশেডিং বিবেচনায় মনে করানোর জন্য। কখনো শেয়ার করা হয় না।" },
+  "profile.degree": { en: "Highest qualification", bn: "সর্বোচ্চ যোগ্যতা" },
+  "profile.degree.hint": { en: "Decides which programmes you are eligible for.", bn: "আপনি কোন প্রোগ্রামের জন্য যোগ্য তা নির্ধারণ করে।" },
+  "profile.field": { en: "Field of study", bn: "পড়াশোনার বিষয়" },
+  "profile.field.hint": { en: "Used to match scholarships restricted to a subject.", bn: "বিষয়ভিত্তিক বৃত্তি মেলাতে ব্যবহৃত হয়।" },
+  "profile.cgpa": { en: "CGPA", bn: "সিজিপিএ" },
+  "profile.cgpa.hint": { en: "Checked against each programme's minimum.", bn: "প্রতিটি প্রোগ্রামের সর্বনিম্ন শর্তের সঙ্গে মেলানো হয়।" },
+  "profile.scale": { en: "Out of", bn: "কত-এর মধ্যে" },
+  "profile.scale.hint": { en: "4 or 5. A CGPA without its scale cannot be compared.", bn: "৪ বা ৫। স্কেল ছাড়া সিজিপিএ তুলনা করা যায় না।" },
+  "profile.gradyear": { en: "Graduation year", bn: "স্নাতক শেষের বছর" },
+  "profile.gradyear.hint": { en: "Some scholarships close a fixed number of years after graduating.", bn: "কিছু বৃত্তি স্নাতকের নির্দিষ্ট বছর পরে বন্ধ হয়ে যায়।" },
+  "profile.gap": { en: "Study gap (years)", bn: "পড়াশোনায় বিরতি (বছর)" },
+  "profile.gap.hint": { en: "A gap is not a problem, but the interview will ask about it.", bn: "বিরতি সমস্যা নয়, তবে সাক্ষাৎকারে এটি জিজ্ঞেস করা হবে।" },
+  "profile.test": { en: "Test taken", bn: "যে পরীক্ষা দিয়েছেন" },
+  "profile.test.hint": { en: "Leave as not answered if you have not taken one yet.", bn: "এখনো না দিলে খালি রাখুন।" },
+  "profile.overall": { en: "Overall band", bn: "সামগ্রিক স্কোর" },
+  "profile.overall.hint": { en: "Compared against the English requirement of each target.", bn: "প্রতিটি লক্ষ্যের ইংরেজি শর্তের সঙ্গে তুলনা করা হয়।" },
+  "profile.listening": { en: "Listening", bn: "শ্রবণ" },
+  "profile.reading": { en: "Reading", bn: "পঠন" },
+  "profile.writing": { en: "Writing", bn: "লিখন" },
+  "profile.speaking": { en: "Speaking", bn: "কথন" },
+  "profile.sub.hint": {
+    en: "Band scores matter: most programmes reject on the lowest band, not the overall.",
+    bn: "আলাদা স্কোর গুরুত্বপূর্ণ: বেশিরভাগ প্রোগ্রাম সামগ্রিক নয়, সর্বনিম্ন স্কোর দেখে বাদ দেয়।",
+  },
+  "profile.budget": { en: "Budget (BDT)", bn: "বাজেট (টাকা)" },
+  "profile.budget.hint": { en: "Filters programmes and shapes the funding gap in your budget.", bn: "প্রোগ্রাম ছাঁকে এবং আপনার বাজেটের ঘাটতি হিসাব করে।" },
+  "profile.intake": { en: "Target intake", bn: "লক্ষ্য সেশন" },
+  "profile.intake.hint": { en: "Anchors every date on your timeline.", bn: "আপনার সময়রেখার প্রতিটি তারিখ এর ভিত্তিতে ঠিক হয়।" },
+  "profile.save": { en: "Save profile", bn: "প্রোফাইল সংরক্ষণ" },
+  "profile.saving": { en: "Saving", bn: "সংরক্ষণ হচ্ছে" },
+  "profile.saved": { en: "Saved", bn: "সংরক্ষিত হয়েছে" },
+  "profile.privacy": {
+    en: "These details stay on our own server and are used to make your answers specific to you. They are never sold or shared, and deleting your account erases all of them.",
+    bn: "এই তথ্য আমাদের নিজের সার্ভারেই থাকে এবং আপনার উত্তর আপনার উপযোগী করতে ব্যবহৃত হয়। কখনো বিক্রি বা শেয়ার করা হয় না, এবং অ্যাকাউন্ট মুছলে সবই মুছে যায়।",
+  },
+
   // Theme / lang toggles
   "toggle.theme.light": { en: "Sheet Kagoj", bn: "শীট কাগজ" },
   "toggle.theme.dark": { en: "Rat-Digonto", bn: "রাত-দিগন্ত" },
@@ -194,7 +250,8 @@ export const dict: Dict = {
   "vault.drop": { en: "Drag a document to the desk", bn: "ডেস্কে একটি দলিল টেনে আনুন" },
   "vault.encrypted": { en: "Encrypted at rest", bn: "বিশ্রামে এনক্রিপ্টেড" },
   "vault.audit": { en: "Prohori's audit", bn: "প্রহরীর নিরীক্ষা" },
-  "vault.expires": { en: "Expires", bn: "মেয়াদ শেষ" },
+  "vault.expires": { en: "Expires in", bn: "মেয়াদ শেষ" },
+  "vault.expired": { en: "Expired", bn: "মেয়াদ উত্তীর্ণ" },
   "vault.finding": { en: "Finding", bn: "পর্যবেক্ষণ" },
   "vault.action": { en: "Recommended action", bn: "প্রস্তাবিত পদক্ষেপ" },
 
@@ -209,7 +266,9 @@ export const dict: Dict = {
   "funding.fair": { en: "Fair itemised cost", bn: "ন্যায্য খাতওয়ারি খরচ" },
   "funding.col.name": { en: "Scholarship", bn: "বৃত্তি" },
   "funding.col.country": { en: "Country", bn: "দেশ" },
-  "funding.col.amount": { en: "Coverage", bn: "কভারেজ" },
+  // "Award", not "Coverage": the column shows what the scholarship is worth in money,
+  // and a header reading "Coverage" is what invited a percent sign onto a money value.
+  "funding.col.amount": { en: "Award", bn: "অনুদান" },
   "funding.col.deadline": { en: "Deadline", bn: "সময়সীমা" },
   "funding.add": { en: "Add funding source", bn: "তহবিল উৎস যোগ করুন" },
 

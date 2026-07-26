@@ -864,7 +864,7 @@ async def _seed_all(
 
         steps = [
             (
-                "ielts",
+                "english_test",
                 1,
                 "Nov 2025",
                 "2025-11-15",
@@ -893,7 +893,7 @@ async def _seed_all(
                 "2026-01-25",
             ),
             (
-                "sop_draft",
+                "sop",
                 3,
                 "Mar 2026",
                 "2026-03-31",
@@ -904,11 +904,11 @@ async def _seed_all(
                 "ট্রান্সক্রিপ্ট ও আইইএলটিএস ফলাফলের সঙ্গে সামঞ্জস্য যাচাই করে "
                 "প্রথম খসড়া তৈরি হয়েছে।",
                 "done",
-                ["ielts"],
+                ["english_test"],
                 "2026-03-28",
             ),
             (
-                "applications",
+                "apply",
                 4,
                 "Jul 2026",
                 "2026-08-15",
@@ -918,7 +918,7 @@ async def _seed_all(
                 "টরন্টোতে আবেদন জমা হয়েছে; ম্যানচেস্টার ও ইউসিএল-এর আবেদন এই "
                 "মাসে চলছে।",
                 "active",
-                ["shortlist", "sop_draft"],
+                ["shortlist", "sop"],
                 None,
             ),
             (
@@ -946,7 +946,7 @@ async def _seed_all(
                 "Waiting on decisions before committing the deposit.",
                 "ডিপোজিট দেওয়ার আগে সিদ্ধান্তগুলোর জন্য অপেক্ষা করা হচ্ছে।",
                 "upcoming",
-                ["applications"],
+                ["apply"],
                 None,
             ),
             (
@@ -1035,7 +1035,7 @@ async def _seed_all(
             (
                 new_ulid(),
                 plan_id,
-                step_ids["ielts"],
+                step_ids["english_test"],
                 "IELTS overall score of 7.0 confirmed; the English-requirement "
                 "check on every shortlisted programme now passes.",
                 "আইইএলটিএস সামগ্রিক স্কোর ৭.০ নিশ্চিত হয়েছে; শর্টলিস্ট করা "

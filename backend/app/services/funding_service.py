@@ -57,7 +57,9 @@ class FundingService:
             "id": r["scholarship_public_id"],
             "name": r["name"],
             "country": r["country_code"],
-            "coverage": r["amount"],
+            "amount": r["amount"],
+            "currency": r["currency"],
+            "coverage_type": r["coverage_type"],
             "deadline": r["deadline_at"],
             "score": r["score"],
             "rank": r["rank"],
@@ -87,9 +89,6 @@ class FundingService:
         return {
             **base,
             "provider": match["provider"],
-            "coverage_type": match["coverage_type"],
-            "amount": match["amount"],
-            "currency": match["currency"],
             "url": match["url"],
         }
 
@@ -232,53 +231,176 @@ class FundingService:
 
     # -- Agent Fee Reality Check --------------------------------------------
 
+    # What a Bangladeshi education consultancy actually bills for, and what each item
+    # really is. This is the substance of the Fee Reality Check.
+    #
+    # It replaces a version that produced two lines: "Document checking: 0" and
+    # "Remaining quoted amount: <the entire quote>". That was honest about not knowing
+    # the official fee schedule and useless to the student, who learned only that we
+    # could not explain their bill. A student handed a 222,222 taka quote does not need
+    # a number from us to be better off; they need to know that most of what they are
+    # being charged for is either free here or a government fee they pay directly to the
+    # government, and that a consultancy cannot mark up a fee it does not collect.
+    #
+    # `amount_bdt` stays 0 for the official fees on purpose, and the note says why:
+    # `docs/database.md` has no reference table of visa and application fee schedules,
+    # only `solvency_rules`, which is a required bank balance rather than a fee. Putting
+    # a remembered figure there would be exactly the confidently-wrong number this
+    # product exists to replace. The category and the note carry the finding; the
+    # arithmetic is confined to what the system can stand behind.
+    _FEE_CATALOGUE: tuple[dict[str, str], ...] = (
+        {
+            "label_en": "Choosing universities and programmes",
+            "label_bn": "বিশ্ববিদ্যালয় ও প্রোগ্রাম বাছাই",
+            "category": "free",
+            "note_en": "Digonto matches programmes to your profile at no cost.",
+            "note_bn": "দিগন্ত আপনার প্রোফাইল অনুযায়ী প্রোগ্রাম মেলায়, বিনামূল্যে।",
+        },
+        {
+            "label_en": "Document checking and organisation",
+            "label_bn": "নথি যাচাই ও গোছানো",
+            "category": "free",
+            "note_en": "Prohori audits your vault against each target's checklist at no cost.",
+            "note_bn": "প্রোহরি প্রতিটি লক্ষ্যের চেকলিস্ট মিলিয়ে আপনার ভল্ট যাচাই করে, বিনামূল্যে।",
+        },
+        {
+            "label_en": "Statement of purpose review",
+            "label_bn": "স্টেটমেন্ট অব পারপাস পর্যালোচনা",
+            "category": "free",
+            "note_en": "Lekhok checks your statement against your own documents for contradictions.",
+            "note_bn": "লেখক আপনার নথির সঙ্গে বিবৃতির অসঙ্গতি যাচাই করে।",
+        },
+        {
+            "label_en": "Scholarship search",
+            "label_bn": "বৃত্তি অনুসন্ধান",
+            "category": "free",
+            "note_en": "Khoji lists what you qualify for, with the reason for each criterion.",
+            "note_bn": "খোঁজি আপনি কোন কোন শর্ত পূরণ করেন তার কারণসহ তালিকা দেয়।",
+        },
+        {
+            "label_en": "Visa interview preparation",
+            "label_bn": "ভিসা সাক্ষাৎকারের প্রস্তুতি",
+            "category": "free",
+            "note_en": "Shonchari runs mock interviews scored against your own file.",
+            "note_bn": "সঞ্চারী আপনার নিজের ফাইলের ভিত্তিতে মক ইন্টারভিউ নেয়।",
+        },
+        {
+            "label_en": "Deadline tracking and reminders",
+            "label_bn": "সময়সীমা পর্যবেক্ষণ ও মনে করানো",
+            "category": "free",
+            "note_en": "The timeline re-plans itself when a portal changes, and alerts you.",
+            "note_bn": "পোর্টাল বদলালে সময়রেখা নিজেই আবার সাজায় এবং আপনাকে জানায়।",
+        },
+        {
+            "label_en": "University application fees",
+            "label_bn": "বিশ্ববিদ্যালয়ের আবেদন ফি",
+            "category": "official_fee",
+            "note_en": (
+                "Paid to the university, not to a consultancy. Pay it yourself on the "
+                "university's own portal and keep the receipt. We do not hold a verified "
+                "fee schedule, so no amount is asserted here."
+            ),
+            "note_bn": (
+                "এটি বিশ্ববিদ্যালয়কে দিতে হয়, কনসালটেন্সিকে নয়। বিশ্ববিদ্যালয়ের নিজের "
+                "পোর্টালে নিজে পরিশোধ করুন এবং রশিদ রাখুন। যাচাইকৃত ফি তালিকা আমাদের "
+                "কাছে নেই, তাই কোনো পরিমাণ দাবি করা হচ্ছে না।"
+            ),
+        },
+        {
+            "label_en": "Visa application and biometrics fees",
+            "label_bn": "ভিসা আবেদন ও বায়োমেট্রিক ফি",
+            "category": "official_fee",
+            "note_en": (
+                "Set by the government and paid on the official portal. A consultancy "
+                "cannot mark up a fee it does not collect, so check this line against the "
+                "official page before paying it to anyone else."
+            ),
+            "note_bn": (
+                "এটি সরকার নির্ধারণ করে এবং সরকারি পোর্টালেই পরিশোধ করতে হয়। যে ফি "
+                "কনসালটেন্সি নেয় না, তার উপর তারা বাড়তি চার্জ করতে পারে না; তাই অন্য "
+                "কাউকে দেওয়ার আগে সরকারি পাতার সঙ্গে মিলিয়ে নিন।"
+            ),
+        },
+        {
+            "label_en": "English test fee",
+            "label_bn": "ইংরেজি পরীক্ষার ফি",
+            "category": "official_fee",
+            "note_en": "Paid to the test centre directly. Book it yourself.",
+            "note_bn": "পরীক্ষা কেন্দ্রকে সরাসরি দিতে হয়। নিজেই বুক করুন।",
+        },
+        {
+            "label_en": "Courier and attestation",
+            "label_bn": "কুরিয়ার ও সত্যায়ন",
+            "category": "fair_service",
+            "note_en": (
+                "A real cost with a real receipt. Ask for the receipt; this is one of the "
+                "few lines on a consultancy bill that should have one."
+            ),
+            "note_bn": (
+                "এটি প্রকৃত খরচ এবং এর রশিদ থাকে। রশিদ চেয়ে নিন; কনসালটেন্সির বিলে "
+                "খুব কম লাইনেরই রশিদ থাকা উচিত।"
+            ),
+        },
+    )
+
     async def fee_check(
         self, user_id: int, *, consultancy: str | None, quoted_bdt: int | None,
         country: str | None, document_id: str | None,
     ) -> dict:
-        """Itemises a consultancy quote against what this system can actually
-        certify.
+        """Itemise a consultancy quote against what this system can actually certify.
 
-        Honesty constraint: `docs/database.md` has no reference table of
-        official application-fee schedules per country or university (only
-        `solvency_rules`, which is a required bank balance, not a fee). Rather
-        than fabricate plausible-looking BDT figures for "university
-        application fees" or "courier charges" the way the contract's
-        illustrative example does, this method returns only the one line it
-        can certify as fact (Prohori's document check is free, per
-        `agents.md`) and flags the remainder of the quote as unverified
-        pending a real fee-schedule source. See the final report.
+        The honesty constraint has not changed: there is no reference table of official
+        application and visa fee schedules in this database, so no BDT figure is invented
+        for a government fee. What changed is that refusing to invent a number is no
+        longer the same as refusing to say anything.
+
+        Six of the ten services a consultancy bills for are free here, and three are
+        government or test-centre fees the student can and should pay directly. That is
+        the finding, and it does not require knowing the amounts. The residual is
+        whatever is left of the quote after the services that cost nothing, which is
+        every taka of it while the official amounts are unverified, and it is labelled
+        `unjustified` rather than presented as a computed fair price.
         """
-
         if quoted_bdt is None:
             raise NotFound(
                 detail_en="Provide a quoted amount, or upload the invoice as a document first.",
                 detail_bn="একটি কোটেড পরিমাণ দিন, অথবা প্রথমে চালানটি নথি হিসেবে আপলোড করুন।",
             )
-        lines: list[dict] = [
+        if quoted_bdt < 0:
+            raise NotFound(
+                detail_en="A quoted amount cannot be negative.",
+                detail_bn="কোটেড পরিমাণ ঋণাত্মক হতে পারে না।",
+            )
+
+        lines: list[dict] = [{**item, "amount_bdt": 0} for item in self._FEE_CATALOGUE]
+
+        free_count = sum(1 for line in lines if line["category"] == "free")
+        official_count = sum(1 for line in lines if line["category"] == "official_fee")
+        lines.append(
             {
-                "label_en": "Document checking and organisation",
-                "label_bn": "নথি যাচাই ও গোছানো",
-                "category": "free",
-                "amount_bdt": 0,
-                "note_en": "Prohori does this at no cost.",
-                "note_bn": "প্রোহরি এটি বিনামূল্যে করে।",
-            },
-            {
-                "label_en": "Remaining quoted amount",
-                "label_bn": "অবশিষ্ট কোটেড পরিমাণ",
+                "label_en": "Unexplained remainder",
+                "label_bn": "অব্যাখ্যাত অবশিষ্ট",
                 "category": "unjustified",
                 "amount_bdt": quoted_bdt,
                 "note_en": (
-                    "No certified official fee schedule is available yet to itemise this "
-                    "amount; treat it as unverified until the consultancy provides receipts."
+                    f"{free_count} of the services above cost nothing here, and "
+                    f"{official_count} are fees you pay to the government or the test "
+                    "centre yourself. Ask the consultancy to itemise this remainder with "
+                    "receipts. Until they do, treat all of it as unverified."
                 ),
                 "note_bn": (
-                    "এই পরিমাণ বিশ্লেষণের জন্য এখনও কোনো সনদপ্রাপ্ত সরকারি ফি তালিকা নেই; "
-                    "কনসালটেন্সি রশিদ না দেওয়া পর্যন্ত এটি অযাচাইকৃত হিসেবে বিবেচনা করুন।"
+                    f"উপরের {free_count}টি সেবা এখানে বিনামূল্যে, এবং {official_count}টি ফি "
+                    "আপনি নিজেই সরকার বা পরীক্ষা কেন্দ্রকে দেন। এই অবশিষ্ট অংশের রশিদসহ "
+                    "বিভাজন কনসালটেন্সির কাছে চান। তা না দেওয়া পর্যন্ত পুরোটাই অযাচাইকৃত "
+                    "হিসেবে দেখুন।"
                 ),
-            },
-        ]
+            }
+        )
+
+        # `fair_bdt` stays None. It is the one number a student would most like and the
+        # one this system has no basis for: a fair price is the official fees plus a
+        # defensible margin, and the official fees are exactly what is unverified. A
+        # figure here would be a guess wearing the authority of a calculation.
         fair_bdt = None
         quote = await self._budgets.create_fee_quote(
             user_id=user_id, consultancy=consultancy, quoted_bdt=quoted_bdt,
