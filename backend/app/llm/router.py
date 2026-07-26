@@ -148,30 +148,145 @@ class LLMResponse:
     degraded: bool = False
 
 
-class _Budget:
-    """Rate and daily-count ceiling for the remote provider."""
+class RemoteExhausted(RuntimeError):
+    """No model in the remote chain has capacity. The caller should use the local model."""
 
-    def __init__(self, max_qps: float, daily_budget: int) -> None:
-        self._min_interval = 1.0 / max_qps if max_qps > 0 else 0.0
+
+class _RateLimited(RuntimeError):
+    """One remote model refused with 429 or 503. Another may still have capacity."""
+
+    def __init__(self, message: str, *, per_day: bool, retry_after: float) -> None:
+        super().__init__(message)
+        self.per_day = per_day
+        self.retry_after = retry_after
+
+
+# How long a model sits out after the API itself rejects a call, when the response gives no
+# usable `Retry-After`. A per-minute rejection clears on its own within the minute; a
+# per-day one does not, so it is held until the next UTC day, which is when Google's daily
+# counters reset.
+_RPM_COOLDOWN_SECONDS = 65.0
+_SECONDS_PER_DAY = 86_400.0
+
+
+class _ModelSlot:
+    """One remote model, with the two ceilings it is subject to.
+
+    Both are needed and neither is sufficient. The local counters stop this process from
+    spending quota it knows it does not have, which is cheap and precise for its own
+    traffic. The cooldown handles what the counters cannot see: the same API key used from
+    a second machine, a shared project, or a limit that moved. When the two disagree, the
+    API is right, so an observed 429 always wins.
+    """
+
+    __slots__ = ("name", "_max_rpm", "_daily_budget", "_recent", "_day", "_day_count", "_cooldown_until")
+
+    def __init__(self, name: str, *, max_rpm: int, daily_budget: int) -> None:
+        self.name = name
+        self._max_rpm = max_rpm
         self._daily_budget = daily_budget
-        self._last_call = 0.0
+        self._recent: list[float] = []
         self._day = time.gmtime().tm_yday
-        self._count = 0
+        self._day_count = 0
+        self._cooldown_until = 0.0
+
+    def _roll_day(self) -> None:
+        today = time.gmtime().tm_yday
+        if today != self._day:
+            self._day, self._day_count = today, 0
+
+    def has_capacity(self, now: float) -> bool:
+        self._roll_day()
+        if now < self._cooldown_until:
+            return False
+        if self._daily_budget > 0 and self._day_count >= self._daily_budget:
+            return False
+        if self._max_rpm > 0:
+            # A sliding window rather than a fixed interval. The published limit is a count
+            # per minute, so two calls a second apart are fine at 5 per minute and a fixed
+            # interval would have made the second one wait.
+            self._recent = [t for t in self._recent if now - t < 60.0]
+            if len(self._recent) >= self._max_rpm:
+                return False
+        return True
+
+    def take(self, now: float) -> None:
+        self._recent.append(now)
+        self._day_count += 1
+
+    def penalise(self, *, per_day: bool, retry_after: float, now: float) -> None:
+        seconds = retry_after if retry_after > 0 else (
+            _SECONDS_PER_DAY if per_day else _RPM_COOLDOWN_SECONDS
+        )
+        self._cooldown_until = max(self._cooldown_until, now + seconds)
+        if per_day:
+            # Stop the local counter disagreeing with the API for the rest of the day.
+            self._day_count = max(self._day_count, self._daily_budget)
+
+    def seconds_until_free(self, now: float) -> float:
+        """0 when usable now. Exact for a cooldown and for the sliding window; a day-long
+        block reports the remainder of the day, because that counter is cleared by the UTC
+        date rolling over rather than by a timer held here."""
+        if now < self._cooldown_until:
+            return self._cooldown_until - now
+        self._roll_day()
+        if self._daily_budget > 0 and self._day_count >= self._daily_budget:
+            return _SECONDS_PER_DAY
+        if self._max_rpm > 0:
+            self._recent = [t for t in self._recent if now - t < 60.0]
+            if len(self._recent) >= self._max_rpm:
+                return max(0.0, 60.0 - (now - self._recent[0]))
+        return 0.0
+
+
+class _ModelPool:
+    """The remote chain, in priority order, with one slot per model.
+
+    `pick` reserves capacity, so the count is incremented before the call rather than after
+    it. Counting on success would let a burst of concurrent requests all pass the check and
+    then all exceed the limit, which is the failure the limit exists to prevent.
+    """
+
+    def __init__(self, chain: list[tuple[str, int, int]]) -> None:
+        self._slots = [
+            _ModelSlot(name, max_rpm=rpm, daily_budget=rpd) for name, rpm, rpd in chain
+        ]
         self._lock = asyncio.Lock()
 
-    async def acquire(self) -> bool:
+    @property
+    def names(self) -> list[str]:
+        return [s.name for s in self._slots]
+
+    async def pick(self, *, skip: set[str] | None = None) -> str | None:
+        """The first model in the chain with capacity, or None."""
+        skip = skip or set()
         async with self._lock:
-            today = time.gmtime().tm_yday
-            if today != self._day:
-                self._day, self._count = today, 0
-            if self._count >= self._daily_budget:
-                return False
-            wait = self._min_interval - (time.monotonic() - self._last_call)
-            if wait > 0:
-                await asyncio.sleep(wait)
-            self._last_call = time.monotonic()
-            self._count += 1
-            return True
+            now = time.monotonic()
+            for slot in self._slots:
+                if slot.name in skip:
+                    continue
+                if slot.has_capacity(now):
+                    slot.take(now)
+                    return slot.name
+        return None
+
+    async def penalise(self, name: str, *, per_day: bool, retry_after: float) -> None:
+        async with self._lock:
+            now = time.monotonic()
+            for slot in self._slots:
+                if slot.name == name:
+                    slot.penalise(per_day=per_day, retry_after=retry_after, now=now)
+                    return
+
+    async def status(self) -> dict[str, float]:
+        """Per model, seconds until it is usable again. 0 means available now.
+
+        For the health endpoint and for diagnosing "why did that answer come from the local
+        model", which is otherwise invisible.
+        """
+        async with self._lock:
+            now = time.monotonic()
+            return {s.name: s.seconds_until_free(now) for s in self._slots}
 
 
 class GemmaProvider:
@@ -258,6 +373,54 @@ class GemmaProvider:
                     break
 
 
+# Extra output budget requested from the remote provider, on top of what the caller asked
+# for, to pay for thinking tokens.
+#
+# Gemini 3.x counts thinking against `maxOutputTokens`, and thinking cannot be switched off
+# on this model family: `thinkingLevel: "off"` is rejected as an invalid enum value and
+# `thinkingBudget: 0` returns 400. Every local task uses `max_tokens` to mean "at most this
+# much visible text", so passing it through unchanged is a silent failure rather than a
+# small one. Measured: a TRANSLITERATE call with `max_tokens=80` spent 72 tokens on thoughts
+# and returned `finishReason: MAX_TOKENS` with the fragment "Transliterate/" where the
+# Bangla should have been.
+#
+# Sized from measurement against gemini-3.6-flash at `thinkingLevel: "low"`: 0 thought
+# tokens when a response schema is set, 215 to 290 for a one-line free-text prompt. This is
+# roughly triple the worst case seen, and an unused reserve costs nothing because generation
+# stops at the stop token.
+_THINKING_RESERVE = 1024
+
+
+def _rate_limited(model: str, r: httpx.Response) -> _RateLimited:
+    """Classify a 429 or 503 into "wait a minute" or "wait until tomorrow".
+
+    The distinction decides how long the model sits out, and getting it wrong is expensive in
+    both directions: treating a daily exhaustion as a minute means retrying a model that
+    cannot answer until tomorrow on every request, and treating a per-minute limit as daily
+    throws away a model for a day over a one-second burst.
+
+    Google signals which one in the quota violation's id and metric, so those are read first.
+    `Retry-After` is honoured when present because it is the server's own answer.
+    """
+    body = ""
+    try:
+        body = r.text[:2000]
+    except Exception:  # noqa: BLE001 - a body we cannot read must not mask the 429 itself
+        pass
+
+    lowered = body.lower()
+    per_day = "perday" in lowered.replace("_", "") or "per day" in lowered
+
+    retry_after = 0.0
+    header = r.headers.get("retry-after", "")
+    if header.strip().isdigit():
+        retry_after = float(header.strip())
+
+    return _RateLimited(
+        f"{model} returned {r.status_code}", per_day=per_day, retry_after=retry_after
+    )
+
+
 class GeminiProvider:
     """Remote provider used for non-authoritative, latency-sensitive turns."""
 
@@ -267,20 +430,54 @@ class GeminiProvider:
         self._s = settings
         self._c = client
         self.model = settings.fallback_model
-        self._budget = _Budget(settings.fallback_max_qps, settings.fallback_daily_budget)
+        self._pool = _ModelPool(settings.fallback_model_chain)
         self._base = "https://generativelanguage.googleapis.com/v1beta"
 
     async def available(self) -> bool:
         return bool(self._s.gemini_api_key) and self._s.fallback_enabled
 
+    async def status(self) -> dict[str, float]:
+        """Per model in the chain, seconds until it can serve again."""
+        return await self._pool.status()
+
     async def complete(self, req: LLMRequest) -> LLMResponse:
+        """Walk the chain until one model answers.
+
+        A rate-limited model is set aside and the next one is tried, because the models have
+        separate quotas: four at 20 requests a day is 80, where a single model would have
+        stopped at 20 and sent everything to the local model for the rest of the day.
+
+        Only a refusal that another model could survive advances the chain. A 400 means the
+        request itself is wrong, so retrying it three more times would spend three more
+        models' quota to collect the same error.
+        """
         if req.contains_user_documents:
             raise DocumentContentLeak(
                 "refusing to send vault-derived content to a remote provider"
             )
-        if not await self._budget.acquire():
-            raise RuntimeError("remote provider daily budget exhausted")
 
+        tried: set[str] = set()
+        last: Exception | None = None
+        while (model := await self._pool.pick(skip=tried)) is not None:
+            tried.add(model)
+            try:
+                return await self._generate(model, req)
+            except _RateLimited as exc:
+                await self._pool.penalise(
+                    model, per_day=exc.per_day, retry_after=exc.retry_after
+                )
+                log.warning(
+                    "remote model %s rate limited (per_day=%s); trying next in chain",
+                    model,
+                    exc.per_day,
+                )
+                last = exc
+
+        raise RemoteExhausted(
+            f"no remote model has capacity (chain: {', '.join(self._pool.names)})"
+        ) from last
+
+    async def _generate(self, model: str, req: LLMRequest) -> LLMResponse:
         started = time.monotonic()
         contents, system = [], None
         for m in req.messages:
@@ -299,7 +496,9 @@ class GeminiProvider:
             "contents": contents,
             "generationConfig": {
                 "temperature": req.temperature,
-                "maxOutputTokens": req.max_tokens,
+                "maxOutputTokens": req.max_tokens + _THINKING_RESERVE,
+                # "low" is the floor this model accepts; see _THINKING_RESERVE.
+                "thinkingConfig": {"thinkingLevel": "low"},
             },
         }
         if system:
@@ -309,22 +508,41 @@ class GeminiProvider:
             body["generationConfig"]["responseSchema"] = req.json_schema
 
         r = await self._c.post(
-            f"{self._base}/models/{self.model}:generateContent",
+            f"{self._base}/models/{model}:generateContent",
             params={"key": self._s.gemini_api_key},
             json=body,
             timeout=60.0,
         )
+        # 429 is quota. 503 is the model being temporarily overloaded, which is somebody
+        # else's saturation rather than ours: both are answerable by a different model, and
+        # neither says the request was wrong.
+        if r.status_code in (429, 503):
+            raise _rate_limited(model, r)
         r.raise_for_status()
         data = r.json()
+        candidates = data.get("candidates") or []
         text = ""
-        for cand in data.get("candidates", []):
+        for cand in candidates:
             for part in (cand.get("content") or {}).get("parts", []):
                 text += part.get("text", "")
+
+        if not text.strip():
+            # A blank or truncated remote reply is worse than no remote reply. The fast
+            # tasks feed this straight into a retrieval query, a conversation title or a
+            # transliteration, so a fragment is not visibly an error: it is a wrong value
+            # that the rest of the request treats as correct. Raising hands the request
+            # back to the caller's fallback, which is the local model.
+            finish = candidates[0].get("finishReason") if candidates else None
+            raise RuntimeError(f"remote provider returned no text (finishReason={finish})")
+
         usage = data.get("usageMetadata", {}) or {}
         return LLMResponse(
             text=text,
             provider=self.name,
-            model=self.model,
+            # The model that actually served it, not the head of the chain. An event log
+            # saying every remote answer came from gemini-3.6-flash would be wrong from the
+            # twenty-first call of the day onwards.
+            model=model,
             latency_ms=int((time.monotonic() - started) * 1000),
             input_tokens=usage.get("promptTokenCount"),
             output_tokens=usage.get("candidatesTokenCount"),
@@ -388,7 +606,13 @@ class ModelRouter:
                 and not req.images
                 and await self.gemini.available()
             ):
-                resp = await self.gemini.complete(req)
+                try:
+                    resp = await self.gemini.complete(req)
+                except Exception:  # noqa: BLE001
+                    # Both providers are unusable. Raise the local failure rather than the
+                    # remote one: the local model is what this request was meant to run on,
+                    # so its error is the one that explains the outage.
+                    raise exc from None
                 resp.degraded = True
                 return resp
             raise

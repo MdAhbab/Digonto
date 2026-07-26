@@ -60,13 +60,80 @@ class Settings(BaseSettings):
     ollama_keep_alive: str = "30m"
 
     # Provider routing. See app/llm/router.py for what "fast" and "core" mean.
-    fast_path_provider: Literal["gemma", "gemini"] = "gemma"
+    # These defaults are the intended deployment, not a placeholder: the previous
+    # default lived only in an untracked .env, so a fresh checkout silently ran a
+    # different routing to the one the deployment was tuned for.
+    fast_path_provider: Literal["gemma", "gemini"] = "gemini"
     core_path_provider: Literal["gemma", "gemini"] = "gemma"
     fallback_enabled: bool = True
-    fallback_model: str = "gemini-3.6-flash"
-    fallback_max_qps: float = 2.0
-    fallback_daily_budget: int = 2000
+
+    # Ordered chain of remote models, tried left to right. The first with capacity serves
+    # the request; when one is rate limited the next takes over; when none is left the local
+    # model takes over. Entries are `name` or `name:rpm:rpd`, and a missing limit falls back
+    # to `fallback_max_rpm` / `fallback_daily_budget`.
+    #
+    # The per-model limits are the published free-tier ceilings for this project, and they
+    # differ by a factor of twenty five, which is why they cannot be one shared number. The
+    # order puts the four strongest models first, each with only 20 requests a day, and then
+    # rests on the two lite models that allow 500. Once the small quotas are spent the chain
+    # settles on the high-volume ones by itself, so the good models are used where they can
+    # be and nothing stops working when they run out.
+    #
+    # Excluded because this project has no free quota for them (0 per minute, 0 per day):
+    # every `gemini-2.0-*`, `gemini-2.5-pro`, `gemini-3-pro-preview`, `gemini-3.1-pro-*` and
+    # `gemini-omni-flash`. Also excluded: the image, TTS, embedding and robotics variants,
+    # which do not answer text prompts.
+    fallback_models: str = (
+        "gemini-3.6-flash:5:20,"
+        "gemini-3.5-flash:5:20,"
+        "gemini-3-flash-preview:5:20,"
+        "gemini-2.5-flash:5:20,"
+        "gemini-3.5-flash-lite:15:500,"
+        "gemini-3.1-flash-lite:15:500,"
+        "gemini-2.5-flash-lite:10:20"
+    )
+
+    # Defaults for a chain entry that does not carry its own limits.
+    #
+    # These were 2.0 requests per second and 2000 per day, which is 120 a minute against a
+    # real limit of 5, so the local ceiling could never trip before Google's did and the
+    # first sign of trouble was a 429 in production.
+    fallback_max_rpm: int = 5
+    fallback_daily_budget: int = 20
     gemini_api_key: str = ""
+
+    @property
+    def fallback_model_chain(self) -> list[tuple[str, int, int]]:
+        """`(name, rpm, rpd)` per entry, in priority order.
+
+        Malformed limits fall back to the defaults rather than raising. A typo in one entry
+        of an environment variable should cost that entry its tuning, not stop the process
+        from starting.
+        """
+        chain: list[tuple[str, int, int]] = []
+        for raw in self.fallback_models.split(","):
+            entry = raw.strip()
+            if not entry:
+                continue
+            parts = entry.split(":")
+            name = parts[0].strip()
+            if not name:
+                continue
+
+            def _num(index: int, default: int) -> int:
+                try:
+                    return int(parts[index])
+                except (IndexError, ValueError):
+                    return default
+
+            chain.append((name, _num(1, self.fallback_max_rpm), _num(2, self.fallback_daily_budget)))
+        return chain
+
+    @property
+    def fallback_model(self) -> str:
+        """The preferred remote model. Logs and reports name this one."""
+        chain = self.fallback_model_chain
+        return chain[0][0] if chain else ""
 
     # --- Retrieval tuning ----------------------------------------------------
     retrieval_top_k: int = 12
