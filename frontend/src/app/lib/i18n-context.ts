@@ -292,7 +292,7 @@ export const dict: Dict = {
   "interview.stop": { en: "Stop", bn: "থামান" },
   "interview.next": { en: "Next question", bn: "পরবর্তী প্রশ্ন" },
   "interview.report": { en: "Weakness report", bn: "দুর্বলতা প্রতিবেদন" },
-  "interview.listening": { en: "Listening", bn: "শুনছি" },
+  "interview.listening": { en: "Awaiting answer...", bn: "উত্তরের অপেক্ষায়..." },
   "interview.thinking": { en: "Thinking", bn: "ভাবছি" },
   "interview.speaking": { en: "Speaking", bn: "বলছি" },
 

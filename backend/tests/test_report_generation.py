@@ -177,3 +177,14 @@ async def test_compose_report_excludes_unanswered_turns():
         "Unanswered turn must not appear in the transcript"
     )
     assert "MyAnswer" in sent
+
+
+@pytest.mark.asyncio
+async def test_pick_questions_without_country_never_picks_country_specific_questions(env):
+    """When no target country is specified, pick_questions must only select universal questions
+    (country_code IS NULL), never serving a country-specific question like Japan guarantor or UK CAS."""
+    dbs, user, interviews = env
+    picked = await interviews.pick_questions(country_code=None, visa_type=None, limit=10)
+    for q in picked:
+        assert q["country_code"] is None, f"Picked country-specific question for {q['country_code']}: {q['text_en']}"
+

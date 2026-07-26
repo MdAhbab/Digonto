@@ -83,6 +83,10 @@ class InterviewService:
         target_row = None
         if target_public_id:
             target_row = await self._targets.get_target(user_id, target_public_id)
+        if not target_row:
+            targets = await self._targets.list_targets(user_id)
+            if targets:
+                target_row = targets[0]
         country_code = country or (target_row["country_code"] if target_row else None)
         resolved_visa = visa_type or (target_row["visa_type"] if target_row else None)
         # Pick the sticky bank before inserting a session so an empty bank cannot leave

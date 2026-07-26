@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Send, ArrowRight } from "lucide-react";
+import { Send, ArrowRight, FileText, Printer } from "lucide-react";
 import { useI18n } from "../lib/i18n";
 import { motion, AnimatePresence } from "motion/react";
 import { Seo, SEO_ROUTES } from "../lib/seo";
@@ -366,6 +366,38 @@ export function Interview() {
 function Report({ report, error }: { report: InterviewReportOut | null; error: ApiError | null }) {
   const { t, lang } = useI18n();
 
+  const downloadMd = () => {
+    if (!report) return;
+    const summary = lang === "en" ? report.summary_en : report.summary_bn;
+    const lines = [
+      `# Shonchari Interview Rehearsal Report`,
+      `**Overall Score:** ${Math.round(report.overall * 100)}%`,
+      `**Summary:** ${summary}`,
+      ``,
+      `## Question Breakdown`,
+      ...report.turns.map(
+        (turn) =>
+          `### Q: ${lang === "en" ? turn.question_en : turn.question_bn}\n**Relevance:** ${
+            turn.relevance !== null ? Math.round((turn.relevance ?? 0) * 100) + "%" : "N/A"
+          }\n**Feedback:** ${(lang === "en" ? turn.feedback_en : turn.feedback_bn) ?? ""}\n`
+      ),
+      `## Strengths`,
+      ...report.strengths.map((s) => `- ${s}`),
+      ``,
+      `## Areas for Improvement`,
+      ...report.weaknesses.map((w) => `- ${w}`),
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "shonchari_interview_report.md";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   if (error) {
     return (
       <div className="w-full text-left">
@@ -394,6 +426,23 @@ function Report({ report, error }: { report: InterviewReportOut | null; error: A
       <div className="mb-8 flex items-center justify-center gap-2 font-mono text-sm">
         <span className="uppercase tracking-wider text-muted-foreground">{t("interview.overall")}</span>
         <span className="text-2xl text-[var(--gold)]">{Math.round(report.overall * 100)}%</span>
+      </div>
+
+      <div className="mb-8 flex flex-wrap items-center justify-center gap-4">
+        <button
+          onClick={downloadMd}
+          className="focus-ring inline-flex items-center gap-2 rounded-[4px] border border-border bg-card px-4 py-2 font-mono text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+        >
+          <FileText className="size-4" />
+          {lang === "en" ? "Download MD (.md)" : "মার্কডাউন (.md) ডাউনলোড"}
+        </button>
+        <button
+          onClick={() => window.print()}
+          className="focus-ring inline-flex items-center gap-2 rounded-[4px] border border-border bg-card px-4 py-2 font-mono text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+        >
+          <Printer className="size-4" />
+          {lang === "en" ? "Save as PDF / Print" : "পিডিএফ সংরক্ষণ / প্রিন্ট"}
+        </button>
       </div>
 
       <p className="mb-8 text-center text-sm leading-relaxed text-muted-foreground">

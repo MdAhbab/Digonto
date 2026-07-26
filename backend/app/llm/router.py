@@ -86,7 +86,6 @@ _CORE_KINDS = frozenset(
         TaskKind.AGENT_TOOL,
         TaskKind.CLASSIFY_CHANGE,
         TaskKind.VISION_EXTRACT,
-        TaskKind.INTERVIEW_SCORE,
         TaskKind.ELIGIBILITY_SCORE,
     }
 )

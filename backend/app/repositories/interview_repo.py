@@ -48,18 +48,23 @@ class InterviewRepo:
         clauses = []
         params: list[Any] = []
         if country_code:
-            clauses.append("(country_code = ? OR country_code IS NULL)")
+            clauses.append("(LOWER(country_code) = LOWER(?) OR country_code IS NULL)")
             params.append(country_code)
+        else:
+            clauses.append("country_code IS NULL")
+
         if visa_type:
-            clauses.append("(visa_type = ? OR visa_type IS NULL)")
+            clauses.append("(LOWER(visa_type) = LOWER(?) OR visa_type IS NULL)")
             params.append(visa_type)
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        else:
+            clauses.append("visa_type IS NULL")
+        where = f"WHERE {' AND '.join(clauses)}"
 
         picked: list[dict[str, Any]] = []
         for tier, share in self._TIER_SHARE:
             # At least one from every tier, whatever the limit and the rounding.
             want = max(1, round(limit * share))
-            tier_clause = f"{where} AND difficulty = ?" if where else "WHERE difficulty = ?"
+            tier_clause = f"{where} AND difficulty = ?"
             rows = await self._db.fetch_all(
                 f"""SELECT * FROM interview_bank {tier_clause}
                      ORDER BY (country_code IS NULL), RANDOM()

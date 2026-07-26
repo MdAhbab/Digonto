@@ -232,6 +232,16 @@ NO_SOURCE_BN = (
     "পোর্টালগুলো পর্যবেক্ষণে রাখা হয়েছে।"
 )
 
+_GREETINGS = frozenset(
+    {
+        "hi", "hello", "hey", "who are you", "what can you do", "who are you?",
+        "what is digonto", "what is digonto?", "help", "good morning",
+        "good evening", "good afternoon", "salam", "assalamualaikum", "hi!",
+        "hello!", "hey!", "হাই", "হ্যালো", "সালাম", "তুমি কে", "তুমি কে?",
+        "দিগন্ত কি", "দিগন্ত কি?", "আসসালামু আলাইকুম", "কি খবর",
+    }
+)
+
 
 async def stream_grounded_answer(
     *,
@@ -259,11 +269,6 @@ async def stream_grounded_answer(
     alt_lang = "en" if primary == "bn" else "bn"
     primary_field = "answer_bn" if primary == "bn" else "answer_en"
 
-    # Every collaborator is owned by the application lifespan and passed in. This
-    # function used to construct its own on a None default, which meant each
-    # question built a ModelRouter, an Embedder with no Redis handle (so no
-    # embedding cache at all), and two AsyncQdrantClient instances that were
-    # never closed. Requiring them here makes that impossible to reintroduce.
     if router is None or retriever is None or cache is None:
         raise ValueError(
             "stream_grounded_answer requires router, retriever, and cache; "
@@ -271,6 +276,37 @@ async def stream_grounded_answer(
         )
 
     try:
+        if question.strip().casefold() in _GREETINGS:
+            intro_en = (
+                "Hello! I am Jukti, Digonto's AI guidance counselor. I answer your questions "
+                "using our verified archive of official government visa rules, university "
+                "requirements, and scholarship portals. Ask me anything about studying abroad, "
+                "solvency requirements, or document checklists!"
+            )
+            intro_bn = (
+                "হ্যালো! আমি যুক্তি, দিগন্তের এআই গাইডেন্স কাউন্সিলর। আমি সরকারি ভিসার নিয়ম, "
+                "বিশ্ববিদ্যালয়ের প্রয়োজনীয়তা এবং বৃত্তির পোর্টাল থেকে যাচাইকৃত তথ্য ব্যবহার করে "
+                "আপনার প্রশ্নের উত্তর দিই। বিদেশে পড়াশোনা, সচ্ছলতার শর্ত বা নথির চেকলিস্ট নিয়ে "
+                "যেকোনো প্রশ্ন আমাকে করতে পারেন!"
+            )
+            primary_text = intro_bn if primary == "bn" else intro_en
+            alt_text = intro_en if primary == "bn" else intro_bn
+            yield {
+                "kind": "meta",
+                "served_by": "local",
+                "cache_hit": False,
+                "model_tag": settings.gemma_model,
+            }
+            for chunk in _chunks(primary_text):
+                yield {"kind": "token", "text": chunk}
+            yield {"kind": "alt", "lang": alt_lang, "text": alt_text}
+            yield {
+                "kind": "final",
+                "confidence": 1.0,
+                "answer_primary": primary_text,
+            }
+            return
+
         # 1. Semantic cache. A hit is valid only under the knowledge version
         #    that is live now, which lookup() enforces.
         # Only questions answered *without* a profile are cache-eligible. The cache key

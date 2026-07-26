@@ -57,6 +57,60 @@ export function Ledger() {
       </PageHeader>
 
       <div className="mx-auto max-w-3xl px-6 py-16 md:px-10">
+        {!result && (
+          <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="space-y-10">
+            <div className="rounded-[4px] border border-[var(--gold)]/30 bg-[var(--gold)]/5 p-6 md:p-8">
+              <div className="mb-4 flex items-center gap-2.5 text-[var(--gold)]">
+                <ShieldCheck className="size-6" />
+                <h2 className="font-serif text-lg md:text-xl font-medium">
+                  {lang === "en" ? "How the Truth Ledger Works" : "সত্য লেজার কীভাবে কাজ করে"}
+                </h2>
+              </div>
+              <p className="text-sm leading-relaxed text-muted-foreground mb-6">
+                {lang === "en"
+                  ? "The Truth Ledger is Digonto's tamper-proof cryptographic archive. Instead of guessing visa fees, financial rules, or university deadlines, our AI guidance counselors cite exact, immutable snapshots captured directly from official government and university portals."
+                  : "সত্য লেজার হলো দিগন্তের টেম্পার-প্রুফ ক্রিপ্টোগ্রাফিক আর্কাইভ। ভিসার ফি, আর্থিক নিয়ম বা বিশ্ববিদ্যালয়ের ডেডলাইন নিয়ে অনুমান না করে, আমাদের এআই গাইডেন্স কাউন্সিলররা সরাসরি সরকারি এবং বিশ্ববিদ্যালয়ের পোর্টাল থেকে সংগৃহীত অপরিবর্তনীয় স্ন্যাপশট উদ্ধৃত করে।"}
+              </p>
+
+              <div className="grid gap-6 md:grid-cols-3 border-t border-[var(--gold)]/20 pt-6">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-foreground">
+                    <span className="flex size-5 items-center justify-center rounded-full bg-[var(--gold)]/20 text-[var(--gold)] font-bold">1</span>
+                    {lang === "en" ? "Find an ID" : "আইডি সংগ্রহ করুন"}
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-normal">
+                    {lang === "en"
+                      ? "Look for Snapshot IDs (e.g., in citations or reports) provided by Jukti, Shonchari, or Prohori during your sessions."
+                      : "আপনার সেশন চলাকালীন যুক্তি, সঞ্চারী বা প্রহরীর দেওয়া সাইটেশন বা রিপোর্ট থেকে স্ন্যাপশট আইডি সংগ্রহ করুন।"}
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-foreground">
+                    <span className="flex size-5 items-center justify-center rounded-full bg-[var(--gold)]/20 text-[var(--gold)] font-bold">2</span>
+                    {lang === "en" ? "Verify Authenticity" : "সত্যতা যাচাই করুন"}
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-normal">
+                    {lang === "en"
+                      ? "Paste the ID into the search bar above to query our immutable database for the exact captured record."
+                      : "সংগৃহীত রেকর্ডটি যাচাই করতে উপরের সার্চ বারে আইডিটি পেস্ট করে অনুসন্ধান করুন।"}
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-foreground">
+                    <span className="flex size-5 items-center justify-center rounded-full bg-[var(--gold)]/20 text-[var(--gold)] font-bold">3</span>
+                    {lang === "en" ? "Inspect Source" : "মূল উৎস দেখুন"}
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-normal">
+                    {lang === "en"
+                      ? "Review the exact text passage, timestamp, SHA-256 hash, and official portal URL to verify your visa requirements."
+                      : "ভিসার শর্তাবলী নিশ্চিত করতে মূল পাঠ্য, সময়কাল, SHA-256 হ্যাশ এবং সরকারি পোর্টাল ইউআরএল দেখুন।"}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
         {result && (
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
             {result.kind === "ok" ? (
