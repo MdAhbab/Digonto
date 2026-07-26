@@ -16,6 +16,7 @@ from app.routers import (
     ask,
     auth,
     destinations,
+    feedback,
     funding,
     interview,
     ledger,
@@ -41,7 +42,9 @@ all_routers: list[APIRouter] = [
     funding.router,
     interview.router,
     interview.ws_router,
+    feedback.router,
     moderation.router,
+    feedback.mod_router,
     meta.router,
 ]
 

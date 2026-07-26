@@ -45,6 +45,53 @@ export const dict: Dict = {
   "common.close": { en: "Close", bn: "বন্ধ" },
   "common.simulated": { en: "Simulated, demonstration only", bn: "অনুকরণ, শুধু প্রদর্শনের জন্য" },
 
+  // Feedback form (POST /feedback). Open to signed-out students on purpose: the
+  // most useful report about a product for people who struggle with official
+  // English often comes from someone who never got as far as making an account.
+  "feedback.eyebrow": { en: "Tell us", bn: "আমাদের বলুন" },
+  "feedback.title": { en: "What did not work?", bn: "কী কাজ করেনি?" },
+  "feedback.intro": {
+    en: "Anything confusing, wrong, or missing. You do not need an account, and you do not need to leave your email.",
+    bn: "যা কিছু অস্পষ্ট, ভুল বা অনুপস্থিত। অ্যাকাউন্ট লাগবে না, ইমেইলও দিতে হবে না।",
+  },
+  "feedback.kind.label": { en: "Kind", bn: "ধরন" },
+  "feedback.kind.confusing": { en: "Confusing", bn: "অস্পষ্ট" },
+  "feedback.kind.wrong": { en: "Wrong answer", bn: "ভুল উত্তর" },
+  "feedback.kind.bug": { en: "Something broke", bn: "কিছু নষ্ট হয়েছে" },
+  "feedback.kind.idea": { en: "Idea", bn: "প্রস্তাব" },
+  "feedback.kind.praise": { en: "This helped", bn: "এটি কাজে লেগেছে" },
+  "feedback.kind.other": { en: "Other", bn: "অন্য" },
+  "feedback.message.label": { en: "Your message", bn: "আপনার বার্তা" },
+  "feedback.message.placeholder": {
+    en: "Write in Bangla or English, whichever is easier.",
+    bn: "বাংলা বা ইংরেজি, যেটি সহজ সেটিতেই লিখুন।",
+  },
+  "feedback.email.label": { en: "Email, if you want a reply", bn: "উত্তর চাইলে ইমেইল" },
+  "feedback.email.placeholder": { en: "Optional", bn: "ঐচ্ছিক" },
+  "feedback.email.note": {
+    en: "Leave this blank and your message stays unlinked to any address, even if you are signed in.",
+    bn: "খালি রাখলে আপনার বার্তা কোনো ইমেইলের সঙ্গে যুক্ত থাকবে না, এমনকি আপনি প্রবেশ করা থাকলেও।",
+  },
+  "feedback.send": { en: "Send", bn: "পাঠান" },
+  "feedback.sending": { en: "Sending", bn: "পাঠানো হচ্ছে" },
+  "feedback.thanks": { en: "Received. Thank you.", bn: "পেয়েছি। ধন্যবাদ।" },
+  "feedback.thanks.detail": {
+    en: "A person reads every message. If you left an email, you will hear back.",
+    bn: "প্রতিটি বার্তা একজন মানুষ পড়েন। ইমেইল দিলে উত্তর পাবেন।",
+  },
+  "feedback.again": { en: "Send another", bn: "আরেকটি পাঠান" },
+  "feedback.error": { en: "Could not send that. Please try again.", bn: "পাঠানো যায়নি। আবার চেষ্টা করুন।" },
+
+  // Scheduled account deletion (DELETE /me, POST /me/deletion/cancel).
+  "del.banner.title": { en: "This account is scheduled for deletion", bn: "এই অ্যাকাউন্টটি মুছে ফেলার জন্য নির্ধারিত" },
+  "del.banner.body": {
+    en: "Everything is erased on {date}. Until then nothing has been deleted and you can stop it.",
+    bn: "{date} তারিখে সবকিছু মুছে যাবে। তার আগে কিছুই মোছা হয়নি, আপনি এটি থামাতে পারেন।",
+  },
+  "del.banner.cancel": { en: "Keep my account", bn: "অ্যাকাউন্ট রাখুন" },
+  "del.banner.cancelling": { en: "Cancelling", bn: "বাতিল করা হচ্ছে" },
+  "del.cancelled": { en: "Your account will not be deleted.", bn: "আপনার অ্যাকাউন্ট মুছে ফেলা হবে না।" },
+
   // Theme / lang toggles
   "toggle.theme.light": { en: "Sheet Kagoj", bn: "শীট কাগজ" },
   "toggle.theme.dark": { en: "Rat-Digonto", bn: "রাত-দিগন্ত" },

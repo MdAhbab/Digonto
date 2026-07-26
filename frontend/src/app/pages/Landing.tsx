@@ -1,6 +1,7 @@
 import { Suspense, lazy } from "react";
 import { Link } from "react-router";
 import { ArrowRight, FileSearch, ShieldCheck, BookOpenText, Radar, Quote, HandCoins, Languages } from "lucide-react";
+import FeedbackForm from "../components/FeedbackForm";
 import { useI18n } from "../lib/i18n";
 import { useTheme } from "../lib/theme";
 import { StaticHorizon } from "../components/StaticHorizon";
@@ -217,6 +218,19 @@ export function Landing() {
             ].map((a, idx) => (
               <AgentColumn key={a.t} title={t(a.t)} desc={t(a.d)} monogram={a.m} delay={idx * 0.1} />
             ))}
+          </div>
+        </Section>
+
+        {/* ---------------- FEEDBACK ---------------- */}
+        {/* Last band on the homepage, and reachable without an account. A student
+            who could not get past the first screen is the one whose report is worth
+            the most, and asking them to sign up first filters out exactly them. */}
+        <Section eyebrow={t("feedback.eyebrow")} className="py-24">
+          <div className="mx-auto max-w-2xl">
+            <h2 className="font-serif text-2xl md:text-3xl">{t("feedback.title")}</h2>
+            <div className="mt-8">
+              <FeedbackForm />
+            </div>
           </div>
         </Section>
       </div>
