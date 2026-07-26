@@ -1,7 +1,8 @@
 # Digonto: Recurrent Continual Retrieval-Augmented Generation for Bangla Study Abroad Guidance on a 2.3B Open Model
 
 > **This file is a readable mirror.** The canonical source is
-> `docs/paper/digonto.tex` (IEEEtran, drag-and-drop Overleaf package). If the two
+> `docs/paper/main.tex` (IEEEtran), with `docs/paper/supplementary.tex` alongside
+> it. If the two
 > disagree, the LaTeX is correct. Edit the LaTeX first, then update this mirror in
 > the same pass, so the title, the numbers, and the contribution count never fall
 > out of step.
@@ -14,8 +15,9 @@
 > allowed. 36 references, every DOI resolved and every URL fetched on
 > 26 July 2026.
 
-**Authors:** Author One, Author Two, Author Three
-Department of Computer Science and Engineering, Institution Name, Dhaka, Bangladesh
+**Authors:** Md Ahbab Hamid Khan, Md Wali Ullah Khan
+Department of Computer Science and Engineering, United International University,
+Dhaka, Bangladesh
 
 ---
 
@@ -28,8 +30,8 @@ information is published in complex English and is revised without notice.
 Hundreds of such firms operate, and no mandatory registration system exists
 for this specific sector. We present Digonto, a free navigator that answers
 study abroad
-questions in Bangla, monitors official portals for changes, and acts for the
-student through seven autonomous agents. Digonto introduces Recurrent Continual
+questions in Bangla, monitors 27 official portals for changes, and carries out
+seven document and planning tasks on the student's behalf. Digonto introduces Recurrent Continual
 Retrieval-Augmented Generation, or RC-RAG. RC-RAG places three loops of different
 speed around one small open model, Gemma 4 E2B, hosted on a single low cost
 virtual machine. A fast loop answers a question and cites a stored copy of the
@@ -41,7 +43,8 @@ the promotion protocol, and the evaluation plan, and we mark every value that is
 a target rather than a measurement.
 
 **Index Terms:** retrieval-augmented generation, continual learning, small
-language models, Bangla language processing, autonomous agents, education access.
+language models, Bangla language processing, schema-constrained generation,
+education access.
 
 ## I. Introduction
 
@@ -72,7 +75,7 @@ then appear in the applicant's own file. One United States university found
 about 65 percent of its applications from India and Bangladesh likely
 fraudulent, much of it traced to agent activity [5]. In 2024, Schengen states
 received 39,345 visa applications from Bangladesh and refused 20,957 of them, a
-refusal rate of 54.90 percent, up from 42.8 percent one year earlier [4], and
+refusal rate of 54.90 percent, up from 43.3 percent one year earlier [4], and
 every refusal also costs a non-refundable fee. Figure 1 plots these application and refusal counts; the
 refusal rate shown there is the source's own reported percentage, not the ratio
 of the two bars, because the source computes it over a narrower category of
@@ -105,8 +108,8 @@ This paper makes six contributions. First, we specify RC-RAG, a three-loop
 architecture that combines event-driven retrieval freshness with gated continual
 model improvement on a single small model. Second, we give an event-driven
 backend design that runs RC-RAG on one virtual machine with three explicit
-caching layers. Third, we describe seven autonomous agents built on Gemma 4
-schema-constrained generation that turn the knowledge store into actions,
+caching layers. Third, we describe seven schema-constrained agents built on Gemma 4
+that turn the knowledge store into actions,
 including three that address what happens after a refusal, which is where the
 published failure rates concentrate. Fourth, we show how streaming combines
 with schema-constrained generation so an answer appears token by token while
@@ -310,11 +313,14 @@ verified against the live model from what remains a protocol definition or a
 target, so that no reader mistakes a plan for a measurement, and no measurement
 is mistaken for a target either.
 
-**Verified today.** Five contract tests and fifteen agent tests run against the
-live model, and all twenty pass as of 26 July 2026. The contract tests confirm
+**Verified today.** The test suite is 191 tests, all passing as of 26 July 2026.
+Five contract tests and fifteen agent tests run against the live model; the
+remaining 171 are offline and cover extraction, discovery, crawl politeness,
+schema validation, streaming decode, the event bus, prompt framing, and vault
+cryptography. The contract tests confirm
 the served model reports tool calling, vision, and thinking as capabilities;
 emits a native tool call with a valid enumerated argument; refuses when no
-passage is given, the single most load-bearing behaviour in the product, rather
+passage is given, the behaviour the whole product depends on, rather
 than inventing a figure; cites the exact snapshot when a passage is given; and
 stays fast on a warm call. The agent tests confirm, among other things, that
 Prohori's deterministic checks reproduce identically on repeated input, that

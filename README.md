@@ -93,10 +93,12 @@ answers in clear Bangla with a citation for every claim.
 ## What Digonto is not
 
 Not a chatbot with a knowledge base attached. The conversational surface is one
-page out of twelve. The value comes from automation: 31 official portals are
+page out of twelve. The value comes from automation: 27 official portals are
 crawled and diffed on a schedule, changes become events, events update a versioned
 knowledge store, agents act on the student's behalf, and the model itself improves
-from real corrections behind two promotion gates.
+from real corrections behind two promotion gates. The registry holds 30 sources; the
+other three return 403 to any automated client and are recorded as deliberately
+unwatched, each with a reachable alternative for the same country.
 
 The watch list is not a fixed list either. The crawler follows links inside each
 source, and a question nobody could answer sends it searching for the official
@@ -213,7 +215,7 @@ Specifications, tool schemas, and MCP servers in [`agents.md`](agents.md).
 
 | Agent | Role |
 |---|---|
-| **পোর্টার** Porter | Watches 31 official portals. Classifies each change, discards wording-only edits, alerts affected students with the changed passage quoted and cited. Grows its own watch list: it follows links inside a source, and when a question has no answer it searches for the official page that would answer it. |
+| **পোর্টার** Porter | Watches 27 official portals. Classifies each change, discards wording-only edits, alerts affected students with the changed passage quoted and cited. Grows its own watch list three ways: it follows links inside a source, it reads the sitemap a source publishes, and when a question has no answer it searches for the official page that would answer it. |
 | **প্রহরী** Prohori | Audits the document vault against each target's real checklist. Flags missing, expiring, and inconsistent documents, and drafts request letters. |
 | **খোঁজি** Khoji | Matches the profile against a funding index, with a reason for every criterion, and builds a complete budget including the bank balance the embassy actually requires. |
 | **সঞ্চারী** Shonchari | Runs mock visa interviews conditioned on the student's own file, scoring answers for consistency with their documents, which is what a visa officer checks. |

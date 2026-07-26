@@ -23,9 +23,11 @@ that can reach a semester's tuition for advice they cannot verify, and errors
 made by an agent appear in the student's own visa file.
 
 The cost of that is measurable. In 2024 Schengen states received 39,345 visa
-applications from Bangladesh and refused 20,957 of them, a refusal rate of 54.90
-percent, up from 42.8 percent one year earlier. Every refusal also costs a
-non-refundable fee. One United States university found that about 65 percent of
+applications from Bangladesh and refused 20,957 of them, a refusal rate of 54.9
+percent, up from 43.3 percent one year earlier. Both rates are the European
+Commission's own published figures; they are computed over a narrower category of
+decisions than the total application count, which is why 20,957 of 39,345 is not
+54.9 percent. Every refusal also costs a non-refundable fee. One United States university found that about 65 percent of
 its applications from India and Bangladesh were likely fraudulent, and traced
 much of that to agent activity.
 

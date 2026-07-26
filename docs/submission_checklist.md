@@ -9,7 +9,7 @@ pressing Submit, not on the last day.
 | Rule | Our answer |
 | --- | --- |
 | Does not use Gemma as a core component | Gemma 4 E2B is the only generation model. It answers, classifies portal changes, scores eligibility and interview answers, extracts document fields with native vision, and drives all seven agents through schema-constrained structured output. Its native tool-calling capability is verified separately and backs three reusable MCP servers. |
-| An unmodified chatbot wrapper with no automation or insight layer | The conversational surface is one page of seven. The system crawls and diffs portals on a schedule, versions a knowledge store, re-plans student timelines from events, and improves the model from real corrections. |
+| An unmodified chatbot wrapper with no automation or insight layer | The conversational surface is one page of twelve. The system crawls and diffs portals on a schedule, versions a knowledge store, re-plans student timelines from events, and improves the model from real corrections. |
 | Missing any of the five components | Tracked in the table below. |
 
 ## The five required components

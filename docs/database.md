@@ -1115,6 +1115,38 @@ from the development network but left enabled, because inferring a dead source f
 one vantage point would be wrong and `consecutive_failures` already exists to
 surface it properly.
 
+The net after 015 to 017 is **30 rows, 27 of them enabled**, which is the number to
+quote wherever the count matters. 31 is what 015 inserts, not what a deployment
+watches.
+
+`018_portal_validators.sql` adds `etag` and `last_modified`, so a re-crawl can send
+`If-None-Match` and `If-Modified-Since` and let the host answer `304 Not Modified`.
+The cheap path was previously only cheap on our side: the crawler downloaded the
+whole body every cycle, hashed it, compared, and usually discarded it. Measured
+against the live registry, gov.uk answers 304 and saves 148 kB per cycle and
+studyinnl.org saves 42 kB, while study-in-germany.de returns an ETag and then ignores
+the conditional request, so revalidation is best-effort by design and the full-body
+path stays correct. A validator is stored on `portals` rather than `snapshots`
+because it describes the current state of a URL, not a historical capture of one, and
+it is only overwritten when the host actually sends a replacement: writing NULL for a
+header the host merely omitted would permanently disable conditional requests against
+any host that sends one inconsistently.
+
+The migration also gives `last_status = 'unchanged'` a meaning for the first time.
+That value was already permitted by the CHECK constraint in 003, already listed in
+`PortalStatus` in both `app/models/ledger.py` and `frontend/src/app/lib/api.ts`, and
+never written: the crawler recorded `'ok'` whether the hash matched or not. It now
+means "the host answered 304 and we never saw a body", which is a different
+operational fact from "we downloaded the page", and the difference is what tells a
+reviewer whether a long-stable portal is honestly stable or is serving a stale ETag
+behind a page that has changed. Because the value already existed end to end, no
+type, model, or frontend change was needed. The allowed set is now enforced in
+`app/repositories/portal_repo.py` next to the code that writes it, alongside an
+allowlist of the columns `patch` may write: identity and provenance columns are
+excluded, because changing a portal's URL under an existing snapshot would repoint
+every citation that resolves through it, which is the one guarantee the Truth Ledger
+cannot give up.
+
 Migration 012 is the one addition after the original eleven: it adds the
 `student_targets.public_id` column described in section 3.2, found by running
 the target endpoints end to end and hitting "no such column: st.public_id"
