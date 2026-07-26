@@ -81,10 +81,23 @@ class ExportReceipt(BaseModel):
 
 
 class DeleteReceipt(BaseModel):
+    """What `DELETE /me` and `POST /me/deletion/cancel` tell the student.
+
+    `scheduled_for` is the date the data is erased, and it is returned rather than
+    left for the student to calculate. A promise to delete "within 30 days" that
+    does not say which day is not something anyone can hold the service to.
+
+    `status` is one of `scheduled`, `already_scheduled` (asking twice does not move
+    the date), `cancelled`, or `not_scheduled`.
+    """
+
     model_config = ConfigDict(populate_by_name=True)
 
     status: str
-    requested_at: str
+    requested_at: str | None = None
+    scheduled_for: str | None = None
+    cancelled_at: str | None = None
+    window_days: int | None = None
 
 
 class WithdrawReceipt(BaseModel):

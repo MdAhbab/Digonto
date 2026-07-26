@@ -16,7 +16,10 @@ from pathlib import Path
 
 from app.config import Settings
 from app.db.connection import Databases
+from app.events.bus import EventBus
 from app.repositories._util import utc_now_iso
+from app.repositories.user_repo import UserRepo
+from app.services.auth_service import AuthService
 
 log = logging.getLogger(__name__)
 
@@ -107,13 +110,56 @@ async def archive_old_events(dbs: Databases, settings: Settings) -> int:
     return total
 
 
-async def run_nightly(dbs: Databases, settings: Settings) -> dict[str, int]:
+async def purge_due_accounts(dbs: Databases, bus: EventBus, settings: Settings) -> int:
+    """Erase accounts whose 30-day deletion window has closed.
+
+    This is where the promise is actually kept, so it is written to keep it even
+    when things go wrong. Each account is purged in its own try block: one account
+    whose vault file cannot be unlinked, or whose replay samples produce a database
+    error, must not stop the accounts queued behind it from being deleted. A failure
+    leaves the row scheduled, so the next night tries again, and the account is never
+    silently marked done.
+
+    Idempotent for the same reason the rest of this module is: the query selects on
+    `deletion_scheduled_for <= now`, and a purged account has no row left to select.
+    """
+    users = UserRepo(dbs.app)
+    auth = AuthService(users, bus, settings)
+    due = await users.list_deletions_due(now=utc_now_iso())
+    purged = 0
+    for account in due:
+        try:
+            await auth.purge_account(
+                account["id"], app_db=dbs.app, events_db=dbs.events, learn_db=dbs.learn
+            )
+            purged += 1
+        except Exception as exc:  # noqa: BLE001 - one account must not block the rest
+            log.error(
+                "could not purge account public_id=%s scheduled_for=%s: %s; "
+                "the row stays scheduled and tonight's failure will be retried",
+                account["public_id"], account["deletion_scheduled_for"], exc,
+            )
+    if purged:
+        log.info("purged %d account(s) whose deletion window had closed", purged)
+    return purged
+
+
+async def run_nightly(
+    dbs: Databases, settings: Settings, bus: EventBus | None = None
+) -> dict[str, int]:
     results = {
         "snapshots_retired": await retire_old_snapshots(dbs),
         "refresh_tokens_purged": await purge_expired_refresh_tokens(dbs),
         "request_metrics_purged": await purge_old_request_metrics(dbs),
         "events_archived": await archive_old_events(dbs, settings),
     }
+    # `bus` is optional so `python -m app.workers.retention` still runs the sweeps
+    # that need no event publishing. Account deletion does publish, and skipping it
+    # silently would be the worst possible failure here, so it is logged loudly.
+    if bus is not None:
+        results["accounts_purged"] = await purge_due_accounts(dbs, bus, settings)
+    else:
+        log.warning("no event bus supplied: scheduled account deletions were NOT processed")
     log.info("nightly retention complete: %s", results)
     return results
 

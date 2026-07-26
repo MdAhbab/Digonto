@@ -173,3 +173,57 @@ class UserRepo:
             "UPDATE refresh_tokens SET revoked_at = ? WHERE family_id = ? AND revoked_at IS NULL",
             (utc_now_iso(), family_id),
         )
+
+    async def revoke_all_refresh_tokens(self, user_id: int) -> None:
+        """Sign this account out of every device.
+
+        Used when deletion is scheduled. The account stays recoverable, but getting
+        back in has to be a deliberate act by whoever knows the password, which is
+        exactly the case where the request came from a session that should not have
+        had access in the first place.
+        """
+        await self._db.execute(
+            "UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+            (utc_now_iso(), user_id),
+        )
+
+    # -- scheduled deletion (019_account_deletion_window.sql) --------------
+
+    async def schedule_deletion(
+        self, user_id: int, *, requested_at: str, scheduled_for: str
+    ) -> None:
+        # `deletion_requested_at IS NULL` in the WHERE clause makes this idempotent
+        # at the storage layer as well as in the service, so two concurrent requests
+        # cannot push the date out twice.
+        await self._db.execute(
+            """UPDATE users
+                  SET deletion_requested_at = ?, deletion_scheduled_for = ?
+                WHERE id = ? AND deletion_requested_at IS NULL""",
+            (requested_at, scheduled_for, user_id),
+        )
+
+    async def cancel_deletion(self, user_id: int) -> None:
+        await self._db.execute(
+            """UPDATE users
+                  SET deletion_requested_at = NULL, deletion_scheduled_for = NULL
+                WHERE id = ?""",
+            (user_id,),
+        )
+
+    async def list_deletions_due(self, *, now: str, limit: int = 200) -> list[dict[str, Any]]:
+        """Accounts whose window has expired, oldest request first.
+
+        Bounded because the purge does per-account file deletion and cross-database
+        writes; a backlog is worked through over consecutive nights rather than in
+        one sweep that could run for an unbounded time.
+        """
+        rows = await self._db.fetch_all(
+            """SELECT id, public_id, deletion_requested_at, deletion_scheduled_for
+                 FROM users
+                WHERE deletion_scheduled_for IS NOT NULL
+                  AND deletion_scheduled_for <= ?
+                ORDER BY deletion_requested_at
+                LIMIT ?""",
+            (now, limit),
+        )
+        return [dict(r) for r in rows]

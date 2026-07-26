@@ -10,6 +10,9 @@ export interface Session {
   display_name: string;
   role: Role;
   status: UserStatus;
+  /** Set only while a deletion request is inside its 30-day window, so the
+      banner can be rendered on every page without another request. */
+  deletion_scheduled_for?: string | null;
 }
 
 export interface AuthCtx {
@@ -19,6 +22,9 @@ export interface AuthCtx {
   login: (email: string, password: string) => Promise<void>;
   signup: (email: string, password: string, displayName: string) => Promise<void>;
   logout: () => Promise<void>;
+  /** Re-read GET /auth/session. Used after cancelling a scheduled deletion, so
+      the banner clears everywhere at once rather than only where it was dismissed. */
+  refreshSession: () => Promise<void>;
 }
 
 /* Routes that run agents / high compute. These require a session.

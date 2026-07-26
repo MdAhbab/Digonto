@@ -16,7 +16,9 @@ signatures differ.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from app.config import Settings
 from app.errors import AccountBanned, Conflict, NotFound, Unauthorized
@@ -30,6 +32,16 @@ from app.security.tokens import create_access_token, hash_refresh_token, new_ref
 # does not exist, so a lookup miss costs about the same wall-clock time as a
 # wrong password on a real account. Never a valid password for any real user.
 _DUMMY_HASH = "$argon2id$v=19$m=65536,t=3,p=4$ZGlnb250b3NhbHQ$Z8x1n8h3vQwq2m2s5r8z1w"
+
+log = logging.getLogger(__name__)
+
+# Days between a student asking for deletion and the data being erased.
+#
+# Thirty is the figure stated in the interface and in docs/privacy.md, so it is
+# defined once here and read from here by the worker, the service and the tests.
+# Changing it changes the promise, which is why an account already inside the
+# window keeps the date it was given rather than being recomputed from this value.
+DELETION_WINDOW_DAYS = 30
 
 
 class AuthService:
@@ -52,6 +64,9 @@ class AuthService:
             "theme_pref": row["theme_pref"],
             "created_at": row["created_at"],
             "profile_complete": False,
+            # `.get`, not `[...]`: this mapper is also handed rows built by tests and
+            # by the demo seed, which predate 019 and do not carry the column.
+            "deletion_scheduled_for": row.get("deletion_scheduled_for"),
             "consents": {
                 "improve_model": consents["improve_model"],
                 "usage_analytics": consents["usage_analytics"],
@@ -126,12 +141,21 @@ class AuthService:
                 detail_en=row.get("status_reason_en") or "This account has been banned.",
                 detail_bn=row.get("status_reason_bn") or "এই অ্যাকাউন্টটি নিষিদ্ধ করা হয়েছে।",
             )
-        if not verify_password(password, row["password_hash"]):
+        # `verify_password` returns (ok, needs_rehash), and a two-tuple is always
+        # truthy. `if not verify_password(...)` was therefore never true, so any
+        # password logged in to any existing account. Unpack, never test the tuple.
+        ok, needs_rehash = verify_password(password, row["password_hash"])
+        if not ok:
             await self._users.record_failed_login(row["id"])
             raise Unauthorized(
                 detail_en="Email or password is incorrect.",
                 detail_bn="ইমেইল অথবা পাসওয়ার্ড সঠিক নয়।",
             )
+        if needs_rehash:
+            # The stored hash used weaker parameters than the current hasher. This is
+            # the only moment the plaintext is available to upgrade it, and the
+            # signal was previously discarded along with the rest of the tuple.
+            await self._users.update_password(row["id"], hash_password(password))
         await self._users.reset_failed_logins(row["id"])
         await self._users.touch_last_seen(row["id"])
         access_token, refresh_plain = await self._issue_tokens(
@@ -193,7 +217,9 @@ class AuthService:
 
     async def change_password(self, user_id: int, current_password: str, new_password: str) -> None:
         row = await self._users.get_by_id(user_id)
-        if row is None or not verify_password(current_password, row["password_hash"]):
+        # See login: verify_password returns a tuple, so `not verify_password(...)`
+        # is always False and this check passed for every password.
+        if row is None or not verify_password(current_password, row["password_hash"])[0]:
             raise Unauthorized(
                 detail_en="Current password is incorrect.",
                 detail_bn="বর্তমান পাসওয়ার্ড সঠিক নয়।",
@@ -311,23 +337,118 @@ class AuthService:
         )
         return {"status": "processing", "requested_at": now}
 
-    async def delete_account(
-        self, user_id: int, current_password: str, *, app_db, events_db, learn_db
-    ) -> dict:
-        """Hard delete, in the order docs/database.md section 7 specifies:
-        capture the trace needed for cross-database cleanup, anonymise
-        `events.db`, delete traceable `learn.db` replay samples, then delete
-        the `app.db` row (FK cascades take care of the rest of `app.db`).
-        """
+    async def request_account_deletion(self, user_id: int, current_password: str) -> dict:
+        """Schedule deletion for `DELETION_WINDOW_DAYS` from now. Reversible until then.
 
+        The window exists because the previous behaviour, an immediate and
+        irreversible hard delete, is dangerous in a product where the data is a
+        student's visa paperwork. A mistyped confirmation, a moment of panic about a
+        passport scan, or a session someone else is using all destroyed the vault
+        keys along with the row, and nothing could bring the documents back.
+
+        Nothing is deleted here. `app/workers/retention.py` performs the deletion
+        once the date passes, and it is the same hard delete this method used to do
+        inline, so the end state is unchanged: only the timing moved.
+
+        The password is still required. Scheduling deletion is destructive even
+        though it is reversible, because a student who does not notice the notice
+        loses everything on day 31.
+        """
         row = await self._users.get_by_id(user_id)
         if row is None:
             raise NotFound(detail_en="Account not found.", detail_bn="অ্যাকাউন্ট পাওয়া যায়নি।")
-        if not verify_password(current_password, row["password_hash"]):
+        # See login: the return value is (ok, needs_rehash), not a bool.
+        if not verify_password(current_password, row["password_hash"])[0]:
             raise Unauthorized(
                 detail_en="Current password is incorrect.",
                 detail_bn="বর্তমান পাসওয়ার্ড সঠিক নয়।",
             )
+
+        # Asking twice does not move the date further out. Otherwise a student who
+        # confirms again on day 29, thinking it did not register, silently buys
+        # themselves another 30 days of retention they did not ask for.
+        if row.get("deletion_requested_at"):
+            return {
+                "status": "already_scheduled",
+                "requested_at": row["deletion_requested_at"],
+                "scheduled_for": row["deletion_scheduled_for"],
+                "window_days": DELETION_WINDOW_DAYS,
+            }
+
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        scheduled_for = (now_dt + timedelta(days=DELETION_WINDOW_DAYS)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        await self._users.schedule_deletion(user_id, requested_at=now, scheduled_for=scheduled_for)
+
+        # Every session is revoked. The account is recoverable, but signing back in
+        # has to be a deliberate act by whoever knows the password, which is the
+        # case where the request was made by someone who should not have had access.
+        await self._users.revoke_all_refresh_tokens(user_id)
+
+        await self._bus.publish(
+            EventType.PROFILE_UPDATED,
+            user_id=user_id,
+            subject_type="user",
+            subject_id=row["public_id"],
+            payload={
+                "action": "deletion_scheduled",
+                "requested_at": now,
+                "scheduled_for": scheduled_for,
+            },
+        )
+        return {
+            "status": "scheduled",
+            "requested_at": now,
+            "scheduled_for": scheduled_for,
+            "window_days": DELETION_WINDOW_DAYS,
+        }
+
+    async def cancel_account_deletion(self, user_id: int) -> dict:
+        """Clear a pending deletion. No password: the session already proved it.
+
+        Requiring the password again would mean a student who wants to keep their
+        account has a harder path than one who wants to destroy it, which is the
+        wrong way round for the irreversible direction.
+        """
+        row = await self._users.get_by_id(user_id)
+        if row is None:
+            raise NotFound(detail_en="Account not found.", detail_bn="অ্যাকাউন্ট পাওয়া যায়নি।")
+        if not row.get("deletion_requested_at"):
+            return {"status": "not_scheduled", "cancelled_at": None}
+
+        now = utc_now_iso()
+        await self._users.cancel_deletion(user_id)
+        await self._bus.publish(
+            EventType.PROFILE_UPDATED,
+            user_id=user_id,
+            subject_type="user",
+            subject_id=row["public_id"],
+            payload={"action": "deletion_cancelled", "cancelled_at": now},
+        )
+        return {"status": "cancelled", "cancelled_at": now}
+
+    async def purge_account(self, user_id: int, *, app_db, events_db, learn_db) -> dict:
+        """Erase one account for good. Called by the nightly job, not by a request.
+
+        Order is fixed by docs/database.md section 7: capture the trace needed for
+        cross-database cleanup, anonymise `events.db`, delete traceable `learn.db`
+        replay samples, then delete the `app.db` row and let the foreign-key cascades
+        remove the rest of `app.db`.
+
+        What survives, and why, is documented in docs/privacy.md and stated in the
+        interface before the student confirms. It is exactly two things. Events keep
+        their shape with `user_id` set to NULL, because the audit trail is what lets
+        anyone verify the system did what it claims and it no longer names anyone.
+        Aggregate daily counts already written by `app/workers/insights.py` are not
+        recomputed, because they contain no reference to any account and there is
+        nothing in them to remove. Nothing else is kept: no profile, no email, no
+        name, no address, no document, no answer, no target, no report.
+        """
+        row = await self._users.get_by_id(user_id)
+        if row is None:
+            raise NotFound(detail_en="Account not found.", detail_bn="অ্যাকাউন্ট পাওয়া যায়নি।")
         now = utc_now_iso()
 
         # `learn.db.replay_samples` is only soft-referenced from app.db answers
@@ -349,15 +470,53 @@ class AuthService:
                 tuple(answer_public_ids),
             )
 
+        # Encrypted document bodies live on disk, outside any table, so the cascade
+        # cannot reach them. Their paths have to be read before the rows go.
+        vault_paths = [
+            r["storage_path"]
+            for r in await app_db.fetch_all(
+                "SELECT storage_path FROM documents WHERE user_id = ?", (user_id,)
+            )
+        ]
+
         # events.db: anonymise rather than delete, the audit trail must survive.
         await events_db.execute("UPDATE events SET user_id = NULL WHERE user_id = ?", (user_id,))
 
+        # Feedback is detached rather than removed (020_feedback.sql): a defect report
+        # is about the product, and it stops being attributable at this moment.
+        await app_db.execute(
+            "UPDATE feedback SET user_id = NULL, contact_email = NULL WHERE user_id = ?",
+            (user_id,),
+        )
+
         await self._users.hard_delete(user_id)
+
+        files_deleted = 0
+        for raw_path in vault_paths:
+            try:
+                Path(raw_path).unlink(missing_ok=True)
+                files_deleted += 1
+            except OSError as exc:
+                # Logged, not raised. The row is already gone, so the ciphertext is
+                # unreadable with or without the file: its per-document key was
+                # wrapped by a key derived from a user id that no longer resolves.
+                # Leaving the sweep half-done would be worse than an orphaned file.
+                log.warning("could not delete vault file %s: %s", raw_path, exc)
+
         await self._bus.publish(
             EventType.USER_DELETED,
             user_id=None,
             subject_type="user",
             subject_id=row["public_id"],
-            payload={"deleted_at": now},
+            payload={
+                "deleted_at": now,
+                "requested_at": row.get("deletion_requested_at"),
+                "replay_samples_deleted": len(answer_public_ids),
+                "vault_files_deleted": files_deleted,
+            },
         )
-        return {"status": "accepted", "requested_at": now}
+        return {
+            "status": "purged",
+            "purged_at": now,
+            "vault_files_deleted": files_deleted,
+        }

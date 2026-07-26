@@ -441,6 +441,8 @@ export interface User {
   created_at: string;
   profile_complete: boolean;
   consents: Consents;
+  /** Set only while a deletion request is inside its 30-day window. */
+  deletion_scheduled_for?: string | null;
 }
 
 export interface AuthResponse {

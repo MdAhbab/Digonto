@@ -13,6 +13,7 @@ function toSession(user: User): Session {
     display_name: user.display_name,
     role: user.role,
     status: user.status,
+    deletion_scheduled_for: user.deletion_scheduled_for ?? null,
   };
 }
 
@@ -70,8 +71,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSession(null);
   }, []);
 
+  const refreshSession = useCallback(async () => {
+    // Failure leaves the current session in place rather than signing the student
+    // out: this is called after cancelling a scheduled deletion, and losing the
+    // session at that exact moment would look like the cancellation failed.
+    try {
+      const user = await api.get<User>("/auth/session", { skipAuthRedirect: true });
+      setSession(toSession(user));
+    } catch {
+      /* keep what we have */
+    }
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ session, loading, login, signup, logout }}>
+    <AuthContext.Provider value={{ session, loading, login, signup, logout, refreshSession }}>
       {children}
     </AuthContext.Provider>
   );

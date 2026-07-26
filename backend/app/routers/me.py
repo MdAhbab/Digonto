@@ -148,12 +148,33 @@ async def get_export(
 async def delete_account(
     body: DeleteAccountRequest,
     user: Mapping = Depends(get_current_user),
-    dbs: Databases = Depends(get_dbs),
     auth_service: AuthService = Depends(get_auth_service),
 ) -> DeleteReceipt:
-    receipt = await auth_service.delete_account(
-        user["id"], body.current_password, app_db=dbs.app, events_db=dbs.events, learn_db=dbs.learn
-    )
+    """Schedule deletion. Nothing is erased until the window closes.
+
+    202 is now literally true, where before it described an operation that had
+    already finished. The response carries the date the data will be gone, because
+    "we will delete it" without a date is not a commitment a student can check.
+
+    Every session is revoked, so the interface signs out. Signing back in with the
+    password is what cancels it, which is the recovery path for a request made from
+    a session that should not have had access.
+    """
+    receipt = await auth_service.request_account_deletion(user["id"], body.current_password)
+    return DeleteReceipt(**receipt)
+
+
+@router.post("/deletion/cancel", response_model=DeleteReceipt)
+async def cancel_account_deletion(
+    user: Mapping = Depends(get_current_user),
+    auth_service: AuthService = Depends(get_auth_service),
+) -> DeleteReceipt:
+    """Keep the account. No password required.
+
+    A student who wants to keep their account must not have a harder path than one
+    who wants to destroy it. The session already proved who this is.
+    """
+    receipt = await auth_service.cancel_account_deletion(user["id"])
     return DeleteReceipt(**receipt)
 
 
