@@ -1,0 +1,119 @@
+# Digonto production stack. Driven by run_onVM.py.
+#
+# The web client is NOT here: it is built to static files and served by nginx on
+# the host, which removes a long-running Node process and a class of failure.
+#
+# Every service binds to 127.0.0.1 only. Docker's published-port rules bypass
+# ufw, so binding to the loopback interface is what actually keeps Redis,
+# Qdrant and Ollama off the public internet, not the firewall.
+
+name: digonto
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: [.env.production]
+    environment:
+      APP_ENV: production
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - appdata:/data
+    depends_on:
+      redis: {condition: service_healthy}
+      qdrant: {condition: service_started}
+      ollama: {condition: service_started}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz',timeout=4).status==200 else 1)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    logging: *logging
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: [.env.production]
+    # Crawling, diffing, embedding, the agent runtime and the learning job all
+    # run here so a slow crawl can never block an HTTP request.
+    command: ["python", "-m", "app.workers.main"]
+    volumes:
+      - appdata:/data
+    depends_on:
+      api: {condition: service_healthy}
+    logging: *logging
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    environment:
+      # One model resident, kept warm. Reloading it per request would dominate
+      # latency on a CPU-only machine.
+      OLLAMA_KEEP_ALIVE: "30m"
+      OLLAMA_MAX_LOADED_MODELS: "2"
+      OLLAMA_NUM_PARALLEL: "2"
+    deploy:
+      resources:
+        limits:
+          memory: 10G
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging: *logging
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrant:/qdrant/storage
+    logging: *logging
+
+  backup:
+    # Litestream streams the SQLite files continuously, so recovery does not
+    # depend on a nightly dump window. Configure a destination in
+    # backend/litestream.yml; with none set it runs as a no-op.
+    image: litestream/litestream:latest
+    restart: unless-stopped
+    command: ["replicate", "-config", "/etc/litestream.yml"]
+    volumes:
+      - appdata:/data
+      - ./backend/litestream.yml:/etc/litestream.yml:ro
+    depends_on:
+      api: {condition: service_healthy}
+    logging: *logging
+
+volumes:
+  appdata:
+  ollama:
+  redis:
+  qdrant:
