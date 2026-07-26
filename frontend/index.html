@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="bn">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title>দিগন্ত — বাংলায় স্টাডি অ্যাব্রড ও ভিসা গাইড | Digonto</title>
+    <meta
+      name="description"
+      content="বাংলাদেশি শিক্ষার্থীদের জন্য বিনামূল্যে, সৎ ও উৎস-উদ্ধৃত স্টাডি অ্যাব্রড ও ভিসা পরিকল্পনা — প্রোগ্রাম থেকে সাক্ষাৎকার পর্যন্ত।"
+    />
+    <link rel="canonical" href="https://digonto.ahbab.dev/" />
+
+    <!-- Theme color: matches the "Sheet Kagoj" (light) / "Rat-Digonto" (dark) surface tokens in src/styles/theme.css -->
+    <meta name="theme-color" content="#f4f1ea" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0c1310" media="(prefers-color-scheme: dark)" />
+
+    <!-- Icons & web app manifest (binary assets pending — see public/README.md) -->
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
+    <link rel="manifest" href="/site.webmanifest" />
+
+    <!-- hreflang: bn is primary, en is the in-app alternate; both currently resolve to the
+         same URL because language is a client-side toggle, not a route segment.
+         See docs/seo.md for the tradeoffs of this approach. -->
+    <link rel="alternate" hreflang="bn" href="https://digonto.ahbab.dev/" />
+    <link rel="alternate" hreflang="en" href="https://digonto.ahbab.dev/" />
+    <link rel="alternate" hreflang="x-default" href="https://digonto.ahbab.dev/" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Digonto" />
+    <meta property="og:locale" content="bn_BD" />
+    <meta property="og:locale:alternate" content="en_US" />
+    <meta property="og:title" content="দিগন্ত — বাংলায় স্টাডি অ্যাব্রড ও ভিসা গাইড | Digonto" />
+    <meta
+      property="og:description"
+      content="বাংলাদেশি শিক্ষার্থীদের জন্য বিনামূল্যে, সৎ ও উৎস-উদ্ধৃত স্টাডি অ্যাব্রড ও ভিসা পরিকল্পনা — প্রোগ্রাম থেকে সাক্ষাৎকার পর্যন্ত।"
+    />
+    <meta property="og:url" content="https://digonto.ahbab.dev/" />
+    <meta property="og:image" content="https://digonto.ahbab.dev/og/og-default.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Digonto — বাংলায় স্টাডি অ্যাব্রড ও ভিসা নেভিগেটর" />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="দিগন্ত — বাংলায় স্টাডি অ্যাব্রড ও ভিসা গাইড | Digonto" />
+    <meta
+      name="twitter:description"
+      content="বাংলাদেশি শিক্ষার্থীদের জন্য বিনামূল্যে, সৎ ও উৎস-উদ্ধৃত স্টাডি অ্যাব্রড ও ভিসা পরিকল্পনা — প্রোগ্রাম থেকে সাক্ষাৎকার পর্যন্ত।"
+    />
+    <meta name="twitter:image" content="https://digonto.ahbab.dev/og/og-default.png" />
+    <meta name="twitter:image:alt" content="Digonto — বাংলায় স্টাডি অ্যাব্রড ও ভিসা নেভিগেটর" />
+
+    <!-- Preload the two fonts needed for the first Bangla paint (body copy + serif headline).
+         Filenames/weights match frontend/fonts-vendor/README.md and the weights actually
+         used in src/styles/theme.css: body = Hind Siliguri 400, h1-h4 = Noto Serif Bengali
+         500 (--font-weight-medium). Bengali subset, since <html lang="bn"> is the default. -->
+    <link rel="preload" href="/fonts/hind-siliguri-400-bengali.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
+    <link rel="preload" href="/fonts/noto-serif-bengali-500-bengali.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
+
+    <style>html, body { height: 100%; margin: 0; } #root { height: 100%; }</style>
+
+    <!-- Structured data: Organization -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        "name": "Digonto",
+        "url": "https://digonto.ahbab.dev/",
+        "logo": "https://digonto.ahbab.dev/icons/icon-512.png",
+        "description": "Digonto is a free, Bangla-first study-abroad and visa navigator that helps Bangladeshi students plan university applications, funding, and visa interviews using cited official sources.",
+        "areaServed": "BD"
+      }
+    </script>
+
+    <!-- Structured data: WebSite + SearchAction -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "Digonto",
+        "url": "https://digonto.ahbab.dev/",
+        "inLanguage": ["bn", "en"],
+        "potentialAction": {
+          "@type": "SearchAction",
+          "target": "https://digonto.ahbab.dev/ask?q={search_term_string}",
+          "query-input": "required name=search_term_string"
+        }
+      }
+    </script>
+
+    <!-- Structured data: FAQPage (general, source-checkable guidance — not Digonto-specific claims) -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "ছাত্র ভিসা প্রত্যাখ্যান হওয়ার সাধারণ কারণ কী কী?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "সবচেয়ে সাধারণ কারণগুলোর মধ্যে আছে অপর্যাপ্ত আর্থিক সচ্ছলতার প্রমাণ, অস্পষ্ট বা অসামঞ্জস্যপূর্ণ পড়াশোনার পরিকল্পনা, দেশে ফেরার সংযোগ প্রমাণে ঘাটতি, এবং অসম্পূর্ণ বা অসামঞ্জস্যপূর্ণ কাগজপত্র। প্রকৃত প্রত্যাখ্যানের হার দেশ, দূতাবাস ও সময়ের সাথে ব্যাপকভাবে পরিবর্তিত হয়, তাই সংশ্লিষ্ট দূতাবাসের সাম্প্রতিক সরকারি পরিসংখ্যান যাচাই করা উচিত।"
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "স্টাডি অ্যাব্রড কনসালটেন্সি ফি সাধারণত কেমন হয়, এবং কীভাবে যাচাই করব?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "কনসালটেন্সি ফি প্রতিষ্ঠান, দেশ ও সেবার পরিধি অনুযায়ী ব্যাপকভাবে পরিবর্তিত হয়, তাই কোনো একক সংখ্যা নির্ভরযোগ্য নয়। ভর্তি ও ভিসা আবেদনের সরকারি ফি সবসময় সংশ্লিষ্ট বিশ্ববিদ্যালয় বা দূতাবাসের অফিসিয়াল ওয়েবসাইটে যাচাই করুন, এবং কোনো কনসালটেন্সিকে অর্থ দেওয়ার আগে তাদের চার্জের একটি লিখিত ভাঙন (breakdown) চেয়ে নিন।"
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "বৃত্তি ও তহবিলের উৎস কোথায় খুঁজব?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "নির্ভরযোগ্য শুরুর বিন্দু হলো লক্ষ্য বিশ্ববিদ্যালয়ের নিজস্ব বৃত্তি পাতা, সংশ্লিষ্ট দেশের সরকারি বৃত্তি বোর্ড (যেমন Chevening, Erasmus+, DAAD, Commonwealth Scholarships), এবং বাংলাদেশ সরকারের শিক্ষা মন্ত্রণালয় ও সংশ্লিষ্ট অধিদপ্তরের ঘোষণা। প্রতিটি সুযোগের যোগ্যতা ও সময়সীমা মূল উৎসে গিয়ে নিশ্চিত করা জরুরি।"
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "স্টাডি অ্যাব্রড ভিসা আবেদনের জন্য সাধারণত কোন কোন কাগজপত্র লাগে?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "সাধারণত পাসপোর্ট, একাডেমিক সার্টিফিকেট ও ট্রান্সক্রিপ্ট, ভাষা দক্ষতার স্কোর (যেমন IELTS), বিশ্ববিদ্যালয়ের অফার বা ভর্তি পত্র, আর্থিক সচ্ছলতার প্রমাণ (ব্যাংক স্টেটমেন্ট বা স্পন্সরশিপ লেটার), উদ্দেশ্য বিবৃতি (SOP), পাসপোর্ট সাইজ ছবি এবং ভিসা আবেদন ফর্ম প্রয়োজন হয়। প্রতিটি দেশ ও দূতাবাসের নির্দিষ্ট চাহিদা আলাদা হতে পারে, তাই সবশেষে অফিসিয়াল দূতাবাস চেকলিস্ট মিলিয়ে নেওয়া আবশ্যক।"
+            }
+          }
+        ]
+      }
+    </script>
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,21 @@
+# Digonto — robots.txt
+# Policy: crawl and index the 5 public marketing/informational routes.
+# Everything auth-gated, the /auth page itself, and the API are kept out of
+# the index — see /docs/seo.md in the repo for the full rationale.
+
+User-agent: *
+Allow: /
+Allow: /destinations
+Allow: /ledger
+Allow: /security
+Allow: /about
+
+Disallow: /planner
+Disallow: /ask
+Disallow: /vault
+Disallow: /funding
+Disallow: /interview
+Disallow: /auth
+Disallow: /api/
+
+Sitemap: https://digonto.ahbab.dev/sitemap.xml

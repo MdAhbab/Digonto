@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Digonto sitemap — only the 5 public, indexable routes. Auth-gated routes
+     (/planner, /ask, /vault, /funding, /interview), /auth, and the 404 catch-all
+     are intentionally excluded; see /docs/seo.md. -->
+<urlset
+  xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+  xmlns:xhtml="http://www.w3.org/1999/xhtml"
+>
+  <url>
+    <loc>https://digonto.ahbab.dev/</loc>
+    <xhtml:link rel="alternate" hreflang="bn" href="https://digonto.ahbab.dev/" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://digonto.ahbab.dev/" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://digonto.ahbab.dev/" />
+    <lastmod>2026-07-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://digonto.ahbab.dev/destinations</loc>
+    <xhtml:link rel="alternate" hreflang="bn" href="https://digonto.ahbab.dev/destinations" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://digonto.ahbab.dev/destinations" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://digonto.ahbab.dev/destinations" />
+    <lastmod>2026-07-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://digonto.ahbab.dev/ledger</loc>
+    <xhtml:link rel="alternate" hreflang="bn" href="https://digonto.ahbab.dev/ledger" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://digonto.ahbab.dev/ledger" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://digonto.ahbab.dev/ledger" />
+    <lastmod>2026-07-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://digonto.ahbab.dev/security</loc>
+    <xhtml:link rel="alternate" hreflang="bn" href="https://digonto.ahbab.dev/security" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://digonto.ahbab.dev/security" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://digonto.ahbab.dev/security" />
+    <lastmod>2026-07-26</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
+    <loc>https://digonto.ahbab.dev/about</loc>
+    <xhtml:link rel="alternate" hreflang="bn" href="https://digonto.ahbab.dev/about" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://digonto.ahbab.dev/about" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://digonto.ahbab.dev/about" />
+    <lastmod>2026-07-26</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+</urlset>
