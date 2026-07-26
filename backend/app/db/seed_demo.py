@@ -174,6 +174,23 @@ async def _seed_all(
     async def bump(table: str, n: int = 1) -> None:
         counts[table] = counts.get(table, 0) + n
 
+    async def portal_by_url(sql: str, params: tuple, url: str) -> int:
+        """Insert a demo portal, or adopt the registry row with the same URL.
+
+        Migration 015 seeds the real watched-portal registry, and two of its
+        entries are the same URLs this demo scenario attaches snapshots to. A
+        plain INSERT would hit the UNIQUE constraint on `portals.url` and abort
+        the whole seed transaction, so the existing row is reused instead: the
+        demo timeline then hangs off the production portal, which is more
+        realistic than a duplicate anyway.
+        """
+        await conn.execute(sql, params)
+        cur = await conn.execute("SELECT id FROM portals WHERE url = ?", (url,))
+        row = await cur.fetchone()
+        if row is None:
+            raise RuntimeError(f"portal row for {url} neither inserted nor found")
+        return int(row[0])
+
     await conn.execute("BEGIN IMMEDIATE")
     try:
         now = _now()
@@ -205,33 +222,29 @@ async def _seed_all(
         ca_fetch2 = now - timedelta(days=3)
         ca_fetch1 = now - timedelta(days=50)
 
-        portal_uk = await run(
-            """INSERT INTO portals
+        uk_url = "https://www.gov.uk/student-visa/money"
+        portal_uk = await portal_by_url(
+            """INSERT OR IGNORE INTO portals
                (public_id, url, kind, country_code, label, parser_key, crawl_cron,
                 enabled, last_fetch_at, last_status, consecutive_failures, created_at)
                VALUES (?, ?, 'government', 'uk', 'gov.uk/student-visa', 'generic',
                        '0 */6 * * *', 1, ?, 'ok', 0, ?)""",
-            (
-                new_ulid(),
-                "https://www.gov.uk/student-visa/money",
-                _ts(uk_fetch2),
-                _ts(uk_fetch1),
-            ),
+            (new_ulid(), uk_url, _ts(uk_fetch2), _ts(uk_fetch1)),
+            uk_url,
         )
         await bump("portals")
-        portal_ca = await run(
-            """INSERT INTO portals
+        ca_url = (
+            "https://www.canada.ca/en/immigration-refugees-citizenship/services/"
+            "study-canada/study-permit/financial-proof.html"
+        )
+        portal_ca = await portal_by_url(
+            """INSERT OR IGNORE INTO portals
                (public_id, url, kind, country_code, label, parser_key, crawl_cron,
                 enabled, last_fetch_at, last_status, consecutive_failures, created_at)
                VALUES (?, ?, 'government', 'ca', 'canada.ca/study-permit', 'generic',
                        '0 */6 * * *', 1, ?, 'ok', 0, ?)""",
-            (
-                new_ulid(),
-                "https://www.canada.ca/en/immigration-refugees-citizenship/services/"
-                "study-canada/study-permit/financial-proof.html",
-                _ts(ca_fetch2),
-                _ts(ca_fetch1),
-            ),
+            (new_ulid(), ca_url, _ts(ca_fetch2), _ts(ca_fetch1)),
+            ca_url,
         )
         await bump("portals", 1)
 
@@ -486,7 +499,9 @@ async def _seed_all(
                 "not a real document."
             ).encode("utf-8")
             sha256 = hashlib.sha256(placeholder).hexdigest()
-            ciphertext, wrapped_dek, nonce = encrypt_file(placeholder, settings=settings)
+            ciphertext, wrapped_dek, nonce = encrypt_file(
+                placeholder, user_id=judge_id, settings=settings
+            )
             storage_path = vault_dir / f"{sha256}.enc"
             storage_path.write_bytes(ciphertext)
 

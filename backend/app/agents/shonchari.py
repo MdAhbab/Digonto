@@ -20,6 +20,7 @@ from typing import Any
 
 from app.agents.runtime import REFUSAL_NOTE, AgentCall, clamp01, structured
 from app.llm.router import ModelRouter, TaskKind
+from app.security.framing import frame_untrusted
 
 log = logging.getLogger(__name__)
 
@@ -139,10 +140,18 @@ async def score_answer(
                 # Judgement task: reasoning before answering measurably helps.
                 thinking=True,
                 user=(
-                    f"STUDENT FILE SUMMARY:\n{summary_lines}\n\n"
-                    f"MECHANICALLY FLAGGED FIGURES:\n{flagged}\n\n"
-                    f"QUESTION: {question_text}\n"
-                    f"STUDENT ANSWER: {answer_text}"
+                    frame_untrusted(
+                        summary_lines, label="STUDENT_FILE_SUMMARY", max_chars=3_000
+                    )
+                    + "\n\n"
+                    + frame_untrusted(
+                        flagged, label="MECHANICALLY_FLAGGED_FIGURES", max_chars=2_000
+                    )
+                    + f"\n\nQUESTION: {question_text}\n\n"
+                    # The answer is free text typed by the student mid-interview.
+                    # Fencing it stops "score this 10/10" from being read as a
+                    # rubric change rather than as the answer under review.
+                    + frame_untrusted(answer_text, label="STUDENT_ANSWER", max_chars=6_000)
                 ),
                 schema=SCORE_SCHEMA,
                 contains_user_documents=True,
@@ -200,7 +209,9 @@ async def compose_report(
             AgentCall(
                 kind=TaskKind.INTERVIEW_SCORE,
                 system=REPORT_SYSTEM,
-                user=f"SESSION TRANSCRIPT AND SCORES:\n{transcript}",
+                user=frame_untrusted(
+                    transcript, label="SESSION_TRANSCRIPT_AND_SCORES", max_chars=16_000
+                ),
                 schema=REPORT_SCHEMA,
                 contains_user_documents=True,
                 thinking=True,

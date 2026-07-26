@@ -452,7 +452,9 @@ class VaultService:
         )
 
         sha256 = hashlib.sha256(data).hexdigest()
-        ciphertext, wrapped_dek, nonce = encrypt_file(data, settings=self._settings)
+        ciphertext, wrapped_dek, nonce = encrypt_file(
+            data, user_id=user_id, settings=self._settings
+        )
 
         storage_dir = self._settings.vault_dir / user_public_id
         storage_dir.mkdir(parents=True, exist_ok=True)
@@ -544,7 +546,7 @@ class VaultService:
             )
             return await self.get_document(user_id, public_id)
 
-        dek = unwrap_dek(doc["wrapped_dek"], settings=self._settings)
+        dek = unwrap_dek(doc["wrapped_dek"], user_id=user_id, settings=self._settings)
         for key, (value, confidence) in values.items():
             await self._documents.upsert_field(
                 document_id=doc["id"],

@@ -22,6 +22,7 @@ from typing import Any
 
 from app.agents.runtime import REFUSAL_NOTE, AgentCall, structured
 from app.llm.router import ModelRouter, TaskKind
+from app.security.framing import frame_untrusted
 
 log = logging.getLogger(__name__)
 
@@ -244,7 +245,10 @@ async def run_audit(
                 user=(
                     "Explain each finding and give one concrete action. "
                     "Return the same codes, in the same order.\n\n"
-                    f"FINDINGS:\n{summary}"
+                    # The findings carry evidence strings built from fields the
+                    # vision pass read out of uploaded documents, so the text is
+                    # attacker-influenced even though the codes are ours.
+                    + frame_untrusted(summary, label="FINDINGS", max_chars=8_000)
                 ),
                 schema=EXPLAIN_SCHEMA,
                 # Findings reference the student's own documents.

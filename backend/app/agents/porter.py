@@ -19,6 +19,7 @@ from typing import Any
 
 from app.agents.runtime import REFUSAL_NOTE, AgentCall, clamp01, structured
 from app.llm.router import ModelRouter, TaskKind
+from app.security.framing import frame_untrusted
 
 log = logging.getLogger(__name__)
 
@@ -57,6 +58,11 @@ ALERT_SCHEMA = {
     ],
 }
 
+# The page being classified is the least trusted text in the product: a page that
+# could talk its way to `cosmetic` would silence a real deadline alert for every
+# affected student. Both texts are fenced by `frame_untrusted`, and
+# `agents.runtime.structured` appends the matching data-only rule to this prompt
+# because that fence is present.
 CLASSIFY_SYSTEM = (
     "You classify changes to official immigration and university pages into "
     "exactly one category.\n"
@@ -102,9 +108,14 @@ async def classify_change(
             temperature=0.0,
             max_tokens=256,
             user=(
-                f"PORTAL: {portal_label}\n"
-                f"OLD TEXT: {old_text}\n"
-                f"NEW TEXT: {new_text}"
+                "Classify the change between the two blocks below.\n\n"
+                + frame_untrusted(
+                    old_text, label="OLD_PORTAL_TEXT", attrs={"portal": portal_label}
+                )
+                + "\n\n"
+                + frame_untrusted(
+                    new_text, label="NEW_PORTAL_TEXT", attrs={"portal": portal_label}
+                )
             ),
             schema=CLASSIFY_SCHEMA,
         ),
@@ -149,11 +160,24 @@ async def compose_alert(
             kind=TaskKind.AGENT_TOOL,
             system=ALERT_SYSTEM,
             user=(
-                f"PORTAL: {portal_label}\n"
                 f"CHANGE TYPE: {category}\n"
-                f"OLD TEXT: {old_text}\n"
-                f"NEW TEXT: {new_text}\n"
-                f"THIS STUDENT:\n{context or 'no additional context'}"
+                "Write the alert for the change between these two blocks.\n\n"
+                + frame_untrusted(
+                    old_text, label="OLD_PORTAL_TEXT", attrs={"portal": portal_label}
+                )
+                + "\n\n"
+                + frame_untrusted(
+                    new_text, label="NEW_PORTAL_TEXT", attrs={"portal": portal_label}
+                )
+                + "\n\n"
+                # Framed as well, and separately: profile fields are student-typed,
+                # and keeping them in their own block stops the portal text from
+                # reaching for them.
+                + frame_untrusted(
+                    context or "no additional context",
+                    label="THIS_STUDENT",
+                    max_chars=2_000,
+                )
             ),
             schema=ALERT_SCHEMA,
             max_tokens=1024,

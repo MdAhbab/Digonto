@@ -18,6 +18,7 @@ from typing import Any
 
 from app.agents.runtime import REFUSAL_NOTE, AgentCall, structured
 from app.llm.router import ModelRouter, TaskKind
+from app.security.framing import frame_untrusted
 
 log = logging.getLogger(__name__)
 
@@ -88,8 +89,14 @@ async def analyse_statement(
                 kind=TaskKind.AGENT_TOOL,
                 system=SYSTEM,
                 user=(
-                    f"STUDENT RECORD (metadata only):\n{record}\n\n"
-                    f"STATEMENT:\n{body}"
+                    frame_untrusted(
+                        record, label="STUDENT_RECORD_METADATA_ONLY", max_chars=4_000
+                    )
+                    + "\n\n"
+                    # The statement is student-authored free text, and the one
+                    # input most likely to contain "ignore the above" by accident
+                    # or design.
+                    + frame_untrusted(body, label="STATEMENT")
                 ),
                 schema=SCHEMA,
                 contains_user_documents=True,

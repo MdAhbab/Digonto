@@ -171,7 +171,7 @@ async def _extract_fields(ctx: AppContext, args: dict[str, Any]) -> dict[str, An
             ),
         }
 
-    dek = unwrap_dek(doc["wrapped_dek"], settings=ctx.settings)
+    dek = unwrap_dek(doc["wrapped_dek"], user_id=doc["user_id"], settings=ctx.settings)
     ciphertext = Path(doc["storage_path"]).read_bytes()
     plaintext = decrypt_bytes(ciphertext, dek, doc["nonce"])
 

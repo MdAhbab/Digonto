@@ -18,6 +18,7 @@ from typing import Any
 
 from app.agents.runtime import REFUSAL_NOTE, AgentCall, clamp01, structured
 from app.llm.router import ModelRouter, TaskKind
+from app.security.framing import frame_untrusted
 
 log = logging.getLogger(__name__)
 
@@ -147,7 +148,14 @@ async def score_eligibility(
                 # Reasoning helps here: the trade-off between fit dimensions is
                 # exactly the kind of judgement thinking mode improves.
                 thinking=True,
-                user=f"STUDENT:\n{profile_summary}\n\nAWARDS:\n{award_lines}",
+                # Award rows are built from crawled scholarship pages, so the
+                # award block is untrusted text and gets the same fence the
+                # retrieval path uses.
+                user=(
+                    frame_untrusted(profile_summary, label="STUDENT", max_chars=2_000)
+                    + "\n\n"
+                    + frame_untrusted(award_lines, label="AWARDS")
+                ),
                 schema=SCORE_SCHEMA,
             ),
         )
