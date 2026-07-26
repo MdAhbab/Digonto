@@ -8,7 +8,11 @@ default work factor without a code change on our side.
 from __future__ import annotations
 
 from argon2 import PasswordHasher
-from argon2.exceptions import VerificationError, VerifyMismatchError
+from argon2.exceptions import (
+    InvalidHashError,
+    VerificationError,
+    VerifyMismatchError,
+)
 
 _hasher = PasswordHasher()
 
@@ -54,9 +58,21 @@ def verify_password(password: str, password_hash: str) -> tuple[bool, bool]:
     """
     try:
         _hasher.verify(password_hash, password)
-    except (VerifyMismatchError, VerificationError):
+    except (VerifyMismatchError, VerificationError, InvalidHashError):
+        # InvalidHashError is not a subclass of VerificationError: it inherits from
+        # ValueError, so it escaped this handler and reached the caller as a 500.
+        # A stored hash that argon2 cannot parse at all is still "this password does
+        # not open this account", which is what the docstring above promises and what
+        # a row written by an older scheme, or truncated by a bad migration, produces.
         return False, False
-    return True, _hasher.check_needs_rehash(password_hash)
+    # check_needs_rehash can raise on a hash it parsed but does not recognise the
+    # parameters of. The password has already been verified at this point, so a
+    # failure here must not turn a successful login into an error: the worst outcome
+    # of returning False is that a weak hash is upgraded on some later login instead.
+    try:
+        return True, _hasher.check_needs_rehash(password_hash)
+    except Exception:  # noqa: BLE001 - never fail a correct password
+        return True, False
 
 
 def check_common_password(password: str) -> bool:
