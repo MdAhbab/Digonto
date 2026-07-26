@@ -17,9 +17,20 @@ from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import StreamingResponse
 
 from app.db.connection import Databases
-from app.deps import RateLimit, get_bus, get_current_user, get_dbs
+from app.deps import (
+    RateLimit,
+    get_bus,
+    get_current_user,
+    get_dbs,
+    get_model_router,
+    get_retriever,
+    get_semantic_cache,
+)
 from app.errors import AppError
 from app.events.bus import EventBus
+from app.llm.router import ModelRouter
+from app.rag.cache import SemanticCache
+from app.rag.retrieval import Retriever
 from app.models.ask import AskRequest, ConversationCreate, ConversationOut, FeedbackRequest, QAItem
 from app.models.common import Page
 from app.repositories.answer_repo import AnswerRepo
@@ -31,9 +42,21 @@ from app.services.ask_service import AskService
 router = APIRouter(tags=["ask"])
 
 
-def get_ask_service(dbs: Databases = Depends(get_dbs), bus: EventBus = Depends(get_bus)) -> AskService:
+def get_ask_service(
+    dbs: Databases = Depends(get_dbs),
+    bus: EventBus = Depends(get_bus),
+    router_: ModelRouter = Depends(get_model_router),
+    retriever: Retriever = Depends(get_retriever),
+    cache: SemanticCache = Depends(get_semantic_cache),
+) -> AskService:
     return AskService(
-        ConversationRepo(dbs.app), AnswerRepo(dbs.app), SnapshotRepo(dbs.app), bus
+        ConversationRepo(dbs.app),
+        AnswerRepo(dbs.app),
+        SnapshotRepo(dbs.app),
+        bus,
+        router_,
+        retriever,
+        cache,
     )
 
 

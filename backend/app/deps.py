@@ -13,11 +13,18 @@ from typing import Any
 
 from fastapi import Depends, Request, Response
 
+import logging
+
 from app.db.connection import Databases
 from app.errors import AccountBanned, Forbidden, RateLimited, Unauthorized
 from app.events.bus import EventBus
 from app.llm.router import ModelRouter
+from app.rag.cache import SemanticCache
+from app.rag.embeddings import Embedder
+from app.rag.retrieval import Retriever
 from app.security.tokens import TokenExpired, TokenInvalid, decode_access_token
+
+log = logging.getLogger(__name__)
 
 
 def get_dbs(request: Request) -> Databases:
@@ -30,6 +37,23 @@ def get_bus(request: Request) -> EventBus:
 
 def get_router(request: Request) -> ModelRouter:
     return request.app.state.model_router
+
+
+# Alias with an unambiguous name. `get_router` reads like a FastAPI APIRouter
+# accessor at the call site, which is confusing in a router module.
+get_model_router = get_router
+
+
+def get_retriever(request: Request) -> Retriever:
+    return request.app.state.retriever
+
+
+def get_semantic_cache(request: Request) -> SemanticCache:
+    return request.app.state.semantic_cache
+
+
+def get_embedder(request: Request) -> Embedder:
+    return request.app.state.embedder
 
 
 def _bearer_token(request: Request) -> str | None:
@@ -187,9 +211,22 @@ class RateLimit:
         key = f"rl:{self.scope}:{self._identity(request)}"
         now = time.time()
 
-        allowed_raw, tokens_raw = await redis_client.eval(
-            _TOKEN_BUCKET_LUA, 1, key, self.limit, self.window_s, now
-        )
+        try:
+            allowed_raw, tokens_raw = await redis_client.eval(
+                _TOKEN_BUCKET_LUA, 1, key, self.limit, self.window_s, now
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Redis being unreachable used to 500 every rate-limited route, which
+            # is most of the product: a cache and bus outage became a total
+            # outage. Fail open instead. The trade-off is deliberate and worth
+            # stating: with Redis down an abusive caller is unthrottled for the
+            # duration, but the alternative denies service to every legitimate
+            # student for the same duration. The model's own concurrency limit
+            # (OLLAMA_NUM_PARALLEL) remains the backstop against overload.
+            log.error("rate limiter unavailable, failing open scope=%s err=%s", self.scope, exc)
+            response.headers["X-RateLimit-Bypassed"] = "limiter-unavailable"
+            return
+
         allowed = int(allowed_raw) == 1
         tokens_left = float(tokens_raw)
         reset_s = 0 if allowed else max(1, int((1 - tokens_left) * self.window_s / self.limit))

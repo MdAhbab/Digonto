@@ -32,6 +32,18 @@ log = logging.getLogger(__name__)
 
 _STREAM_KEY_PREFIX = "ev"  # Redis key: f"{_STREAM_KEY_PREFIX}:{stream}", e.g. "ev:crawl"
 
+# Entries retained per Redis stream. The durable archive is `events.db`, so this
+# only has to be deep enough that a consumer restarting cannot miss work.
+STREAM_MAXLEN = 10_000
+
+# A message a consumer took but never acked stays in that group's pending list
+# forever, because XREADGROUP with ">" only ever returns new messages. Without a
+# reclaim pass, one worker crash silently strands work: the event is neither
+# processed nor dead-lettered, and nothing reports it. These two settings drive
+# the reclaim sweep in `consume`.
+PENDING_RECLAIM_IDLE_MS = 60_000
+PENDING_RECLAIM_EVERY_S = 30.0
+
 
 class EventStream(str, enum.Enum):
     """Matches the CHECK constraint on events.stream, docs/database.md section 4."""
@@ -196,7 +208,13 @@ class EventBus:
         redis_stream_key = f"{_STREAM_KEY_PREFIX}:{stream_enum.value}"
         await self._redis.xadd(
             redis_stream_key,
-            {
+            # `maxlen` bounds the stream. events.db is the durable archive, so a
+            # Redis stream is only a delivery buffer, and an unbounded one is a
+            # slow memory leak on a VM whose RAM is budgeted for the model.
+            # `approximate` lets Redis trim whole nodes, which is much cheaper.
+            maxlen=STREAM_MAXLEN,
+            approximate=True,
+            fields={
                 "event_id": event_id,
                 "type": type_enum.value,
                 "actor": resolved_actor,
@@ -239,7 +257,23 @@ class EventBus:
             if "BUSYGROUP" not in str(exc):
                 raise
 
+        next_reclaim = 0.0
         while True:
+            # Reclaim before reading. A message another consumer took and never
+            # acked (process killed mid-handler) is invisible to ">" reads and
+            # would otherwise be stranded in the pending list indefinitely.
+            now = asyncio.get_running_loop().time()
+            if now >= next_reclaim:
+                next_reclaim = now + PENDING_RECLAIM_EVERY_S
+                await self._reclaim_pending(
+                    redis_stream_key=redis_stream_key,
+                    group=group,
+                    consumer=consumer,
+                    handler=handler,
+                    max_retries=max_retries,
+                    batch_size=batch_size,
+                )
+
             try:
                 response = await self._redis.xreadgroup(
                     group, consumer, {redis_stream_key: ">"}, count=batch_size, block=block_ms
@@ -262,6 +296,54 @@ class EventBus:
                         handler=handler,
                         max_retries=max_retries,
                     )
+
+    async def _reclaim_pending(
+        self,
+        *,
+        redis_stream_key: str,
+        group: str,
+        consumer: str,
+        handler: Callable[[dict[str, Any]], Awaitable[None]],
+        max_retries: int,
+        batch_size: int,
+    ) -> None:
+        """Take over messages idle longer than PENDING_RECLAIM_IDLE_MS.
+
+        XAUTOCLAIM reassigns them to this consumer and returns them, so they run
+        through the same idempotent path as a fresh delivery. An event already
+        recorded in `applied_events` is simply acked, which is what makes taking
+        over another consumer's in-flight work safe.
+        """
+        try:
+            _cursor, messages, _deleted = await self._redis.xautoclaim(
+                redis_stream_key,
+                group,
+                consumer,
+                min_idle_time=PENDING_RECLAIM_IDLE_MS,
+                count=batch_size,
+            )
+        except redis_exceptions.RedisError as exc:
+            log.warning("xautoclaim failed key=%s group=%s err=%s", redis_stream_key, group, exc)
+            return
+
+        if not messages:
+            return
+        log.info("reclaimed %d stranded message(s) key=%s group=%s", len(messages), redis_stream_key, group)
+        for message_id, fields in messages:
+            # XAUTOCLAIM can return (id, None) for entries trimmed out of the
+            # stream while still pending. There is nothing to hand a handler, so
+            # ack to clear the pending entry.
+            if not fields:
+                await self._redis.xack(redis_stream_key, group, message_id)
+                continue
+            await self._handle_one(
+                redis_stream_key=redis_stream_key,
+                group=group,
+                message_id=message_id,
+                fields=fields,
+                handler=handler,
+                max_retries=max_retries,
+            )
 
     async def _handle_one(
         self,
@@ -294,12 +376,6 @@ class EventBus:
         for attempt in range(1, max_retries + 1):
             try:
                 await handler(message)
-                await self._events_db.execute(
-                    "INSERT INTO applied_events (consumer, event_id, applied_at) VALUES (?, ?, ?)",
-                    (group, event_id, _now_iso()),
-                )
-                await self._redis.xack(redis_stream_key, group, message_id)
-                return
             except Exception as exc:  # noqa: BLE001 - must not crash the consumer loop
                 last_error = f"{type(exc).__name__}: {exc}"
                 log.warning(
@@ -308,6 +384,32 @@ class EventBus:
                 )
                 if attempt < max_retries:
                     await asyncio.sleep(min(0.5 * attempt, 2.0))
+                continue
+
+            # The handler succeeded. Recording that and acking are bookkeeping,
+            # and they sit outside the retry `try` on purpose. `INSERT OR IGNORE`
+            # matters: a plain INSERT raises on the UNIQUE (consumer, event_id)
+            # constraint when this event was already applied (a redelivery, or a
+            # second replica of the same group), and if that raise were caught as
+            # a handler failure the handler would be run again for its side
+            # effects and a successfully processed event would land in
+            # `dead_letters`.
+            try:
+                await self._events_db.execute(
+                    "INSERT OR IGNORE INTO applied_events (consumer, event_id, applied_at) "
+                    "VALUES (?, ?, ?)",
+                    (group, event_id, _now_iso()),
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Losing the idempotency marker only risks re-processing later,
+                # which consumers are required to tolerate. Losing the ack would
+                # guarantee it.
+                log.error(
+                    "could not record applied_events group=%s event=%s err=%s",
+                    group, event_id, exc,
+                )
+            await self._redis.xack(redis_stream_key, group, message_id)
+            return
 
         await self._events_db.execute(
             """

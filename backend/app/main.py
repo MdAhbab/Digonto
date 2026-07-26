@@ -1,11 +1,9 @@
 """Digonto FastAPI application factory.
 
 Lifespan wires up the three SQLite databases, runs migrations, and constructs
-the shared Redis client, EventBus, and ModelRouter once, storing them on
-`app.state` for app/deps.py to hand out. Routers are mounted defensively: the
-routers/services/agents package is owned by a different work stream and may
-not exist yet, so a missing `app.routers` module must not stop this app from
-booting health checks and the auth foundation on its own.
+the shared Redis client, EventBus, ModelRouter, Qdrant client, and Embedder
+once, storing them on `app.state` for app/deps.py to hand out. Nothing in a
+request path builds its own connection pool.
 """
 
 from __future__ import annotations
@@ -21,6 +19,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from qdrant_client import AsyncQdrantClient
 from redis.asyncio import Redis
 from ulid import ULID
 
@@ -31,6 +30,9 @@ from app.db.seed_demo import seed_demo
 from app.errors import Forbidden, install_exception_handlers
 from app.events.bus import EventBus
 from app.llm.router import ModelRouter
+from app.rag.cache import SemanticCache
+from app.rag.embeddings import Embedder
+from app.rag.retrieval import Retriever
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -56,8 +58,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # str fields, not bytes, out of this client.
     redis_client: Redis = Redis.from_url(settings.redis_url, decode_responses=True)
     bus = EventBus(redis_client, dbs.events)
-    model_router = ModelRouter(settings)
     http_client = httpx.AsyncClient()
+    model_router = ModelRouter(settings, client=http_client)
+
+    # Retrieval clients are built once here, not per question. Constructing them
+    # inside the ask path meant every question created two AsyncQdrantClient
+    # instances that were never closed, and an Embedder with no Redis handle,
+    # which silently disabled the embedding cache that backend.md section 4.3
+    # describes. Both are corrected by owning them for the process lifetime.
+    qdrant = AsyncQdrantClient(url=settings.qdrant_url)
+    embedder = Embedder(settings, redis=redis_client, client=http_client)
+    retriever = Retriever(embedder, settings, qdrant=qdrant)
+    semantic_cache = SemanticCache(embedder, settings, qdrant=qdrant)
+    await retriever.ensure_collections()
 
     app.state.settings = settings
     app.state.dbs = dbs
@@ -65,6 +78,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.bus = bus
     app.state.model_router = model_router
     app.state.http_client = http_client
+    app.state.qdrant = qdrant
+    app.state.embedder = embedder
+    app.state.retriever = retriever
+    app.state.semantic_cache = semantic_cache
     app.state.started_at = time.monotonic()
 
     await seed_demo(dbs, settings)
@@ -73,6 +90,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        # Order matters: close borrowers of the shared httpx client before the
+        # client itself, and the databases last so a shutdown-time write still
+        # has somewhere to go.
+        await embedder.aclose()
+        await qdrant.close()
         await model_router.aclose()
         await http_client.aclose()
         await redis_client.aclose()
@@ -80,13 +102,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def _register_routers(app: FastAPI) -> None:
-    try:
-        from app.routers import router as api_router  # type: ignore[import-not-found]
-    except ImportError as exc:
-        log.warning(
-            "app.routers not available yet (%s); booting with health checks only", exc
-        )
-        return
+    """Mount the API surface.
+
+    This deliberately does not catch ImportError. It used to, from the period
+    when the router package was being written by a separate work stream and a
+    missing module legitimately meant "not built yet". That tolerance is now a
+    hazard: a typo or a missing dependency anywhere in the router tree would
+    boot an API with zero endpoints, 404 every route, and still report healthy
+    on /healthz, which is the worst possible failure shape for something a
+    judge or a student is about to use. A broken import should stop the process.
+    """
+    from app.routers import router as api_router
+
     app.include_router(api_router, prefix=get_settings().api_base_path)
 
 

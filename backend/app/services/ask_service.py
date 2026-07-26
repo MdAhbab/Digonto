@@ -5,16 +5,18 @@ api_contract.md section 5. This service owns persistence (`questions`,
 sequence the frontend's `TypesetAnswer` component depends on. It does not
 own retrieval or generation.
 
-**Boundary with the RAG pipeline.** The actual hybrid retrieval (Qdrant
-dense + BM25, reciprocal rank fusion, rerank) and grounded generation
-described in `backend/backend.md` section 3.1 is a distinct subsystem this
-build does not include: there is no Qdrant client, no embedding worker, and
-no semantic cache wired into this HTTP-layer task. Rather than fabricate
-tokens or citations, this service calls
-`app.rag.pipeline.stream_grounded_answer`, which does not exist yet, exactly
-the way it calls the unresolved `app.agents.*` functions elsewhere. See the
-final report for the exact async-generator contract this service expects
-from that function.
+**Boundary with the RAG pipeline.** Hybrid retrieval (Qdrant dense + BM25,
+reciprocal rank fusion, rerank), the semantic cache, and grounded generation
+live in `app/rag/`, behind the single async generator
+`app.rag.pipeline.stream_grounded_answer`. This service consumes that event
+sequence and owns everything around it; it never retrieves or generates.
+The pipeline's clients (model router, embedder, Qdrant) are constructed once
+at startup and passed in, so a question does not build its own connections.
+
+Event kinds this service handles, in the order they can arrive: `meta`
+(always first), then either `refusal`, or `token`* followed by `citation`*,
+`alt`, and `final`. `incomplete` may replace the citation group when
+generation was cut off after tokens were already shown.
 """
 
 from __future__ import annotations
@@ -71,11 +73,17 @@ class AskService:
         answers: AnswerRepo,
         snapshots: SnapshotRepo,
         bus: EventBus,
+        router: ModelRouter,
+        retriever: Retriever,
+        cache: SemanticCache,
     ) -> None:
         self._conversations = conversations
         self._answers = answers
         self._snapshots = snapshots
         self._bus = bus
+        self._router = router
+        self._retriever = retriever
+        self._cache = cache
 
     async def stream_answer(
         self, *, user_id: int, user_public_id: str, question: str,
@@ -118,6 +126,7 @@ class AskService:
         answer_en: str | None = None
         confidence: float | None = None
         is_refusal = False
+        incomplete = False
         refusal_reason: str | None = None
         served_by = "local"
         cache_hit = False
@@ -131,6 +140,9 @@ class AskService:
                 lang=primary_lang,
                 country=country,
                 kb_version_id=kb_version_id,
+                router=self._router,
+                retriever=self._retriever,
+                cache=self._cache,
             )
             async for event in pipeline:
                 kind = event.get("kind")
@@ -204,6 +216,16 @@ class AskService:
                         "reason_bn": event.get("reason_bn", ""),
                         "watching_portal_ids": event.get("watching_portal_ids", []),
                     }
+                elif kind == "incomplete":
+                    # Generation was cut off after tokens had already been shown.
+                    # The text stands, but it carries no citations, so the client
+                    # has to be able to label it rather than presenting it with
+                    # the same authority as a fully cited answer.
+                    incomplete = True
+                    yield "incomplete", {
+                        "reason_en": event.get("reason_en", ""),
+                        "reason_bn": event.get("reason_bn", ""),
+                    }
                 elif kind == "final":
                     confidence = event.get("confidence")
                     if event.get("answer_primary") is not None:
@@ -247,12 +269,22 @@ class AskService:
             first_token_ms=first_token_ms,
         )
 
+        # On a refusal the question text and country ride along on the event. The
+        # discovery consumer (app/workers/discovery.py) needs them to search for a
+        # source that would have answered it, which is what turns a refusal from a
+        # dead end into the trigger that grows the watch list. Carried only when
+        # refusing, so an ordinary answered question adds nothing to the archive
+        # that `questions` does not already hold.
+        payload: dict[str, Any] = {"is_refusal": is_refusal, "confidence": confidence}
+        if is_refusal:
+            payload["question"] = text_normalised
+            payload["country"] = country
         await self._bus.publish(
             EventType.ANSWER_GENERATED,
             user_id=user_id,
             subject_type="answer",
             subject_id=answer_row["public_id"],
-            payload={"is_refusal": is_refusal, "confidence": confidence},
+            payload=payload,
         )
 
         yield "done", {
@@ -260,6 +292,7 @@ class AskService:
             "first_token_ms": first_token_ms,
             "confidence": confidence,
             "tokens": token_count,
+            "incomplete": incomplete,
         }
 
     # -- history, feedback, conversations --------------------------------
