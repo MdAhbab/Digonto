@@ -51,11 +51,29 @@ def _up() -> bool:
 pytestmark = pytest.mark.skipif(not _up(), reason="Ollama is not running")
 
 
+# The context window every call below asks for.
+#
+# This is not a tuning knob, it is the difference between testing the product and testing
+# something the product never does. `gemma4:e2b` advertises a 131,072-token context, and
+# Ollama sizes the KV cache from whatever `num_ctx` it is given, so omitting the option
+# asks for a cache for a 131k window. On a machine this size that thrashes, and all four
+# `/api/chat` tests here timed out at 180 seconds each with Ollama otherwise idle, while
+# the running API answered the same questions in about twenty seconds.
+#
+# The API answered because `ModelRouter` sends `num_ctx` on every call and its own comment
+# says the option "is not optional". These tests were the one caller that did not, so they
+# were measuring a configuration that never ships. 8192 is what TaskKind.GROUNDED_ANSWER
+# requests, which is the path these contracts are about.
+TEST_NUM_CTX = 8192
+
+
 def _chat(payload: dict) -> dict:
     payload.setdefault("model", MODEL)
     payload.setdefault("stream", False)
     payload.setdefault("think", False)
     payload.setdefault("keep_alive", "30m")
+    options = payload.setdefault("options", {})
+    options.setdefault("num_ctx", TEST_NUM_CTX)
     started = time.monotonic()
     r = httpx.post(f"{OLLAMA}/api/chat", json=payload, timeout=TIMEOUT)
     r.raise_for_status()
