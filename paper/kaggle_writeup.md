@@ -211,6 +211,12 @@ consolidation, more destination countries, and regional dialect output.
 10. Sample input and output pair: English embassy passage, cited Bangla explanation.
 11. Adapter promotion gate chart (benchmark scores before and after each promotion).
 
+**Sign in to try it.** Student: `judge@digonto.ahbab.dev` / `DigontoJudge2026!`
+Reviewer: `moderator@digonto.ahbab.dev` / `DigontoMod2026!`
+Both are seeded with realistic data, so the product does something on first
+sight. Ask a question no source covers to see the refusal contract, which is the
+behaviour the whole system is built around.
+
 **Links:** live app https://digonto.ahbab.dev · public repository
 https://github.com/MdAhbab/Digonto · demo video (YouTube, under 5 minutes) ·
 public notebook (Gemma integration, benchmark, and evaluation, reproducible).

@@ -25,6 +25,50 @@ advice that is often wrong. That is the entire purpose of this project.
 
 ---
 
+## For judges: sign in here
+
+Two accounts are seeded with realistic data, so nothing has to be created before
+the product does something. Sign in at
+[digonto.ahbab.dev/auth](https://digonto.ahbab.dev/auth). Email and password
+only, no confirmation email, no one-time code.
+
+| Role | Email | Password |
+| --- | --- | --- |
+| **Student** | `judge@digonto.ahbab.dev` | `DigontoJudge2026!` |
+| **Reviewer** | `moderator@digonto.ahbab.dev` | `DigontoMod2026!` |
+
+The student account arrives with a profile, three shortlisted programmes, six
+vault documents, a plan already in progress, answered questions with citations,
+and one completed interview. The reviewer account opens on a queue with real
+pending work in it.
+
+**The fastest way to see what this is, in about ninety seconds:**
+
+1. **Ask Digonto** — ask `যুক্তরাজ্যে পড়তে কত টাকা ব্যাংকে দেখাতে হবে?` (how much
+   must I show in the bank to study in the UK). Then click a citation marker in
+   the answer. The panel that opens shows the archived source page with the
+   quoted sentence highlighted and the timestamp it was captured.
+2. **Ask something no source covers.** It refuses and says which portals it is
+   watching, instead of inventing a number. That behaviour is the point of the
+   system, not a limitation of it.
+3. **Journey Planner** — press *Simulate a portal change*. A step re-plans, the
+   dependent steps move with it, and the drawer explains what changed and cites
+   the source. The response is labelled `simulated` so it is never mistaken for
+   a real embassy change.
+4. **Document Vault** — upload any PDF or photo. Prohori audits it against the
+   real checklist and reports what is missing, expiring, or inconsistent.
+5. **Sign in as the reviewer** and open the change queue. A portal change the
+   model classified with low confidence is waiting for a human before any
+   student is alerted.
+
+> These two accounts exist for judging. They are seeded only when `APP_ENV` is
+> not `production`, every row they create carries `is_demo = 1`, and
+> `python run.py --reset` wipes and rebuilds them. Change both passwords in
+> `.env` before this deployment is used by real students, since anything
+> published in a public README should be treated as public.
+
+---
+
 ## The problem, in verified numbers
 
 Every figure was checked against its source on 26 July 2026. Full citations with

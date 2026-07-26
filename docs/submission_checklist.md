@@ -75,12 +75,24 @@ the video, and the notebook equally.
   screen and in the caption.
 - The internal fallback path is not mentioned in any public artifact.
 
+## Judge credentials
+
+Published in README.md and in the writeup so a judge never has to create an
+account. Student `judge@digonto.ahbab.dev` / `DigontoJudge2026!`, reviewer
+`moderator@digonto.ahbab.dev` / `DigontoMod2026!`.
+
+Confirm before submitting that both actually sign in on the deployed site, not
+only locally. A judge who cannot get past the sign-in screen scores what they
+can see, which is nothing.
+
 ## Final pass before submitting
 
 - [ ] Five components all present and public.
 - [ ] Writeup word count re-counted after the last edit.
 - [ ] Video runtime confirmed on the export.
 - [ ] Live URL and repository URL open in a private browser window.
+- [ ] Both seeded accounts sign in on the deployed site from a private window.
+- [ ] The seeded student account still has its demo data (a reset wipes it).
 - [ ] Notebook runs clean on a fresh session.
 - [ ] Every measured number matches across writeup, README, paper, and notebook.
 - [ ] No mention of the internal fallback anywhere public.
