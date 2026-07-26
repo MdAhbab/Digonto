@@ -5,31 +5,32 @@ sentences, no metaphors, no informal wording, every claim true of the deployed b
 
 ---
 
-## English (158 words)
+## English (167 words)
 
 **Digonto is free for every student until 31 July.**
 
 Studying abroad should not require paying someone to read English for you.
 
-Digonto answers your study abroad and visa questions in Bangla, and every answer
-quotes the official page it came from, with the date. When no official source covers
-your question, it says so instead of guessing.
+Digonto answers your study abroad and visa questions in Bangla, quoting the official
+page and date each answer came from. When no official source covers your question, it
+says so instead of guessing.
 
-It also watches 27 official embassy, university and scholarship portals. When a rule
-changes, you are told which line changed.
+It watches 27 official embassy, university and scholarship portals, and tells you which
+line changed when a rule changes.
 
-You can build a timeline, check your documents before you submit them, find
-scholarships, and practise your visa interview.
+You can build a timeline, check documents before you submit them, find scholarships, and
+practise your visa interview.
 
-Your files stay on our own server. They are never sent to any outside company. Delete
-your account and everything is erased within 30 days.
+Your files stay on our own server and are never sent to any outside company. Delete your
+account and your documents, answers and profile are erased within 30 days. Only your name
+and email stay, so nobody else can claim your address.
 
 No fees, no commission, no advertising.
 
 Thank you to Google for releasing Gemma, the open model Digonto runs on.
 
 Try it: digonto.ahbab.dev
-Tell us what to fix using the form at the bottom of the home page.
+Tell us what to fix in the form on the home page.
 
 ---
 
@@ -50,7 +51,8 @@ Tell us what to fix using the form at the bottom of the home page.
 বৃত্তি খুঁজতে পারেন, এবং ভিসা সাক্ষাৎকারের অভ্যাস করতে পারেন।
 
 আপনার ফাইল আমাদের নিজের সার্ভারেই থাকে। কোনো বাইরের প্রতিষ্ঠানে পাঠানো হয় না।
-অ্যাকাউন্ট মুছে দিলে ৩০ দিনের মধ্যে সব তথ্য মুছে যায়।
+অ্যাকাউন্ট মুছে দিলে ৩০ দিনের মধ্যে আপনার কাগজপত্র, উত্তর ও প্রোফাইল মুছে যায়। শুধু নাম ও
+ইমেইল ঠিকানা রাখা হয়, যাতে অন্য কেউ আপনার ঠিকানা দাবি করতে না পারে।
 
 কোনো ফি নেই, কমিশন নেই, বিজ্ঞাপন নেই।
 
@@ -72,12 +74,16 @@ Every sentence maps to something the build actually does.
   contract, and a citation naming a passage that was not retrieved is discarded.
 - "it says so instead of guessing" is the refusal contract, enforced by the output
   schema rather than by prompt wording.
-- "never sent to any outside company" is true because inference is self-hosted and the
-  router refuses to send document content to the remote fallback.
-- "erased within 30 days" is the deletion window in `019_account_deletion_window.sql`.
-  The post does not claim "everything without exception", because two things do survive
-  and both are listed in `docs/privacy.md`: events with the user id removed, and
-  aggregate counts that name nobody.
+- "your files ... never sent to any outside company" is scoped to files on purpose. It is
+  true of documents unconditionally: the router forces anything carrying document content
+  or an image to the local model. It would not be true of the sentence you type into the
+  question box, because the small preparation steps run on a hosted model, so the post
+  does not claim it. See section 1 of `docs/privacy.md`.
+- "erased within 30 days" is the deletion window in `019_account_deletion_window.sql`, and
+  the post names the exception rather than claiming "everything". Three things survive, all
+  listed in `docs/privacy.md`: events with the user id removed, aggregate counts that name
+  nobody, and one row holding the name and email address, which the post states outright
+  because it is the only exception a reader would object to learning about later.
 
 Deliberately absent: any claim about accuracy rates, student numbers, or comparisons
 against consultancies. None of those are measured yet, and the paper marks them as

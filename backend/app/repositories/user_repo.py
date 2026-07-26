@@ -8,6 +8,7 @@ from typing import Any
 
 from app.db.connection import Database
 from app.repositories._util import new_ulid, utc_now_iso
+from app.security.tombstone import normalise_email
 
 
 class UserRepo:
@@ -187,10 +188,21 @@ class UserRepo:
             (utc_now_iso(), user_id),
         )
 
-    # -- deleted-account tombstones (023) ----------------------------------
+    # -- deleted-account tombstones (023, rewritten by 025) ----------------
+    #
+    # These two methods are the only permitted access to `deleted_accounts`. The table
+    # holds the name and address of people who asked to be deleted, so every additional
+    # reader widens the exposure of the one record they cannot remove. Reporting and
+    # analytics must not read it.
 
     async def record_tombstone(
-        self, *, public_id: str, email_hmac: str, deleted_at: str, reason: str = "self"
+        self,
+        *,
+        public_id: str,
+        email: str,
+        display_name: str | None,
+        deleted_at: str,
+        reason: str = "self",
     ) -> None:
         """Note that this address held an account. Called as part of the purge.
 
@@ -198,21 +210,30 @@ class UserRepo:
         signs up and deletes repeatedly produces one row with a rising count. That count
         is the signal the table exists to expose: one cycle is a change of mind, a dozen
         is the spam pattern.
+
+        `display_name` is overwritten by a later cycle rather than accumulating. The
+        current holder of the address is what a support question is about, and a history
+        of every name a person has used is a profile, which this table is not.
         """
         await self._db.execute(
-            """INSERT INTO deleted_accounts (public_id, email_hmac, deleted_at, reason)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(email_hmac) DO UPDATE SET
-                   cycle_count = cycle_count + 1,
-                   deleted_at  = excluded.deleted_at,
-                   public_id   = excluded.public_id,
-                   reason      = excluded.reason""",
-            (public_id, email_hmac, deleted_at, reason),
+            """INSERT INTO deleted_accounts
+                   (public_id, email, display_name, deleted_at, reason)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(email) DO UPDATE SET
+                   cycle_count  = cycle_count + 1,
+                   deleted_at   = excluded.deleted_at,
+                   public_id    = excluded.public_id,
+                   display_name = excluded.display_name,
+                   reason       = excluded.reason""",
+            (public_id, normalise_email(email), display_name, deleted_at, reason),
         )
 
-    async def tombstone_for_email(self, email_hmac: str) -> dict[str, Any] | None:
+    async def tombstone_for_email(self, email: str) -> dict[str, Any] | None:
+        """The row for an address, or None. Normalises so a lookup cannot be evaded by
+        case or surrounding whitespace, which the column's NOCASE collation covers for
+        case alone."""
         row = await self._db.fetch_one(
-            "SELECT * FROM deleted_accounts WHERE email_hmac = ?", (email_hmac,)
+            "SELECT * FROM deleted_accounts WHERE email = ?", (normalise_email(email),)
         )
         return dict(row) if row else None
 

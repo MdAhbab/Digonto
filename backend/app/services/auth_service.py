@@ -27,7 +27,6 @@ from app.repositories._util import new_ulid, utc_now_iso
 from app.repositories.user_repo import UserRepo
 from app.security.passwords import check_common_password, hash_password, verify_password
 from app.security.tokens import create_access_token, hash_refresh_token, new_refresh_token
-from app.security.tombstone import email_digest
 
 # A fixed, valid-looking hash to run `verify_password` against when the email
 # does not exist, so a lookup miss costs about the same wall-clock time as a
@@ -111,7 +110,7 @@ class AuthService:
         # The message names the reason rather than reusing "an account already exists".
         # A student who deleted their own account and is trying to come back deserves to
         # be told what happened instead of being told something untrue.
-        tombstone = await self._users.tombstone_for_email(email_digest(email, self._settings))
+        tombstone = await self._users.tombstone_for_email(email)
         if tombstone is not None:
             raise Conflict(
                 detail_en=(
@@ -512,14 +511,15 @@ class AuthService:
             (user_id,),
         )
 
-        # Written *before* the row is deleted, because the address is on the row and this
-        # is the last moment it exists. A failure here must not leave the account
+        # Written *before* the row is deleted, because the address and name are on the row
+        # and this is the last moment they exist. A failure here must not leave the account
         # half-deleted, so it is ordered immediately before the delete and inside the same
         # code path: if recording the tombstone raises, nothing has been destroyed yet and
         # the nightly sweep retries the whole account tomorrow.
         await self._users.record_tombstone(
             public_id=row["public_id"],
-            email_hmac=email_digest(row["email"], self._settings),
+            email=row["email"],
+            display_name=row.get("display_name"),
             deleted_at=now,
             reason="moderator" if row.get("status") == "banned" else "self",
         )

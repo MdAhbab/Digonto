@@ -84,9 +84,12 @@ export const dict: Dict = {
 
   // Scheduled account deletion (DELETE /me, POST /me/deletion/cancel).
   "del.banner.title": { en: "This account is scheduled for deletion", bn: "এই অ্যাকাউন্টটি মুছে ফেলার জন্য নির্ধারিত" },
+  // The banner names the one exception. It used to say "everything is erased", which stopped
+  // being true when the tombstone began keeping the name and address (migration 025), and a
+  // student reading this line is at the exact moment the exception is worth knowing.
   "del.banner.body": {
-    en: "Everything is erased on {date}. Until then nothing has been deleted and you can stop it.",
-    bn: "{date} তারিখে সবকিছু মুছে যাবে। তার আগে কিছুই মোছা হয়নি, আপনি এটি থামাতে পারেন।",
+    en: "Your documents, answers and profile are erased on {date}. Your name and email stay, so nobody else can claim your address. Nothing has been deleted yet, and you can stop it.",
+    bn: "{date} তারিখে আপনার কাগজপত্র, উত্তর ও প্রোফাইল মুছে যাবে। নাম ও ইমেইল ঠিকানা রাখা হয়, যাতে অন্য কেউ আপনার ঠিকানা দাবি করতে না পারে। এখনো কিছুই মোছা হয়নি, আপনি এটি থামাতে পারেন।",
   },
   "del.banner.cancel": { en: "Keep my account", bn: "অ্যাকাউন্ট রাখুন" },
   "del.banner.cancelling": { en: "Cancelling", bn: "বাতিল করা হচ্ছে" },

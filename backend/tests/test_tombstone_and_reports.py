@@ -21,7 +21,7 @@ from app.errors import Conflict
 from app.repositories._util import new_ulid, utc_now_iso
 from app.repositories.user_repo import UserRepo
 from app.security.passwords import hash_password
-from app.security.tombstone import email_digest, normalise_email
+from app.security.tombstone import normalise_email
 from app.services.auth_service import AuthService
 from app.workers import retention, student_reports
 
@@ -50,43 +50,12 @@ async def env():
             await dbs.close_all()
 
 
-# --- the digest --------------------------------------------------------------
+# --- matching one address to one row ------------------------------------------
 
 
-def test_the_digest_is_stable_under_case_and_whitespace():
-    s = Settings(vault_master_key=KEY)
-    assert email_digest("Rina@Example.com", s) == email_digest("  rina@example.com  ", s)
-
-
-def test_the_digest_does_not_contain_the_address():
-    """The whole reason for storing a digest instead of the address."""
-    s = Settings(vault_master_key=KEY)
-    d = email_digest("rina.akter@example.com", s)
-    for fragment in ("rina", "akter", "example", "@"):
-        assert fragment not in d
-    assert len(d) == 64
-
-
-def test_the_digest_is_keyed_so_a_stolen_database_does_not_yield_addresses():
-    """An unkeyed SHA-256 of an email is the email: the search space is enumerable."""
-    a = email_digest("rina@example.com", Settings(vault_master_key="c" * 64))
-    b = email_digest("rina@example.com", Settings(vault_master_key="d" * 64))
-    assert a != b
-
-
-def test_an_unkeyed_deployment_refuses_rather_than_storing_a_reversible_digest():
-    """An empty key would make this a bare SHA-256, which for an email is reversible.
-
-    A stub rather than `Settings(vault_master_key="")`: this repository has a real key in
-    its `.env`, and pydantic-settings fills the field from there, so constructing the
-    empty case through `Settings` tests the environment instead of the guard.
-    """
-
-    class _NoKey:
-        vault_master_key = ""
-
-    with pytest.raises(RuntimeError, match="unkeyed"):
-        email_digest("rina@example.com", _NoKey())  # type: ignore[arg-type]
+def test_normalisation_is_stable_under_case_and_whitespace():
+    """The lookup at signup and the write at deletion must agree on one spelling."""
+    assert normalise_email("  Rina@Example.com ") == "rina@example.com"
 
 
 def test_normalisation_does_not_merge_addresses_belonging_to_different_people():
@@ -119,27 +88,71 @@ async def test_a_purge_records_a_tombstone(env):
     dbs, users, auth, settings = env
     await _purge_now(dbs, users, auth, settings, "gone@example.com")
 
-    row = await users.tombstone_for_email(email_digest("gone@example.com", settings))
+    row = await users.tombstone_for_email("gone@example.com")
     assert row is not None
     assert row["cycle_count"] == 1
     assert row["reason"] == "self"
 
 
 @pytest.mark.asyncio
-async def test_the_tombstone_holds_no_address_and_no_name(env):
-    """It answers "have we seen this address" and nothing else."""
+async def test_the_tombstone_keeps_the_address_and_the_name(env):
+    """Both are retained in plain text, which is what makes a support question about a
+    deleted account answerable. The cost of that decision is what the next test bounds."""
+    dbs, users, auth, settings = env
+    await _purge_now(dbs, users, auth, settings, "Rina.Akter@Example.com")
+
+    row = await dbs.app.fetch_one("SELECT * FROM deleted_accounts")
+    assert row["email"] == "rina.akter@example.com", "stored normalised, as users.email was"
+    assert row["display_name"] == "Student"
+
+
+@pytest.mark.asyncio
+async def test_the_tombstone_holds_nothing_beyond_identity_and_the_abuse_counter(env):
+    """The guard that matters now that the table is readable.
+
+    A row here is the one record a student cannot remove, so what may sit next to their
+    name is a fixed list. Age, district, gender, budget, shortlisted countries, question
+    counts and anything model-written are all absent, and a column added later fails this
+    test rather than shipping quietly.
+    """
+    dbs, users, auth, settings = env
+    await _purge_now(dbs, users, auth, settings, "rina@example.com")
+
+    cols = {r["name"] for r in await dbs.app.fetch_all("PRAGMA table_info(deleted_accounts)")}
+    assert cols == {
+        "public_id",
+        "email",
+        "display_name",
+        "deleted_at",
+        "reason",
+        "cycle_count",
+    }
+
+
+@pytest.mark.asyncio
+async def test_no_other_table_retains_the_address(env):
+    """The tombstone is the single stated exception, so it must also be the only one.
+
+    Sweeps every table in `app.db` for the deleted address. Written this way rather than
+    naming tables so that a table added later is covered without anyone remembering to
+    update this test.
+    """
     dbs, users, auth, settings = env
     await _purge_now(dbs, users, auth, settings, "rina.akter@example.com")
 
-    cols = {r["name"] for r in await dbs.app.fetch_all("PRAGMA table_info(deleted_accounts)")}
-    assert "email" not in cols
-    assert "display_name" not in cols
-
-    dumped = json.dumps(
-        [dict(r) for r in await dbs.app.fetch_all("SELECT * FROM deleted_accounts")]
-    )
-    for fragment in ("rina", "akter", "Student", "@example.com"):
-        assert fragment not in dumped
+    tables = [
+        r["name"]
+        for r in await dbs.app.fetch_all(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        )
+    ]
+    for table in tables:
+        if table == "deleted_accounts":
+            continue
+        dumped = json.dumps(
+            [dict(r) for r in await dbs.app.fetch_all(f"SELECT * FROM {table}")], default=str
+        )
+        assert "rina.akter" not in dumped, f"{table} still holds the deleted address"
 
 
 @pytest.mark.asyncio
@@ -192,12 +205,31 @@ async def test_repeat_cycles_are_counted_rather_than_duplicated(env):
     # insert directly to model the sequence the counter exists to reveal.
     await users.record_tombstone(
         public_id=new_ulid(),
-        email_hmac=email_digest("cycler@example.com", settings),
+        email="cycler@example.com",
+        display_name="Second Try",
         deleted_at=utc_now_iso(),
     )
     rows = await dbs.app.fetch_all("SELECT * FROM deleted_accounts")
     assert len(rows) == 1
     assert rows[0]["cycle_count"] == 2
+    # The current name replaces the old one. A list of every name a person has used is a
+    # profile, and this table is an abuse control.
+    assert rows[0]["display_name"] == "Second Try"
+
+
+def test_the_reporting_jobs_never_read_the_tombstone_table():
+    """The access rule stated in migration 025, asserted rather than trusted.
+
+    `deleted_accounts` is the one place a name survives deletion. If a nightly report ever
+    joined against it, every report would carry the names of people who had left, which is
+    the exact outcome the rest of this file exists to prevent.
+    """
+    import inspect
+
+    from app.workers import insights, student_reports as sr
+
+    for module in (insights, sr):
+        assert "deleted_accounts" not in inspect.getsource(module), module.__name__
 
 
 # --- the per-student report --------------------------------------------------

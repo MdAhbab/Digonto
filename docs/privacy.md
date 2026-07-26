@@ -14,9 +14,21 @@ provider.
 
 This is enforced, not just intended. `app/llm/router.py` refuses a request carrying
 document content on the path that could reach a remote provider, and
-`backend/tests/test_agents_live.py` asserts that refusal against the live model. A
-remote fallback exists for ordinary text questions when the local model is
-unavailable; it cannot be reached by anything holding your document.
+`backend/tests/test_agents_live.py` asserts that refusal against the live model.
+
+**What does reach an outside provider, and what cannot.** Some small preparation steps run
+on Google's hosted model rather than the local one: rewriting your question into a search
+query, converting Banglish into Bangla script, naming a conversation, and suggesting
+follow-up questions. The words you type in the question box can therefore be sent to
+Google as part of those steps. The reason is capacity, not quality: the local model serves
+one request at a time, and putting a short title in that queue delays the answer you are
+waiting for. Separately, if the local model fails outright, a plain text question can be
+answered remotely, and the answer is labelled degraded when that happens.
+
+Your uploaded documents, and every field read out of them, are excluded from both of
+those. That is a property of the router rather than a rule someone remembers to follow:
+any request flagged as carrying document content, and any request carrying an image, goes
+to the local model whatever the configuration says.
 
 Files at rest are encrypted with AES-256-GCM. Each document has its own key, and that
 key is wrapped by a key derived for your account alone through HKDF-SHA256
@@ -61,7 +73,8 @@ if any row still points at the deleted account, so a table added in future is co
 without anyone remembering to update the test.
 
 **What survives, and why.** Three things, and they are all listed here because a
-deletion promise with unlisted exceptions is not a promise.
+deletion promise with unlisted exceptions is not a promise. The third one is the one to
+read: it is the only exception that still names you.
 
 1. **Event records, with your user id removed.** The event log is what makes the rest
    of this document checkable: it is how anyone can verify the system did what it
@@ -77,16 +90,26 @@ deletion promise with unlisted exceptions is not a promise.
    in it can be traced back to you, which is why erasing it would remove nothing about
    you.
 
-3. **A record that the address was used.** One row holding your account id, the date,
-   and a keyed digest of your email address. The address itself is not kept: the digest
-   is an HMAC-SHA256 under a server-held key, which can answer "has this address held an
-   account" and cannot be turned back into the address. Your name is not kept either.
+3. **Your email address and display name.** One row holding your account id, your email
+   address, the name you displayed, and the date it was deleted. Both the address and the
+   name are kept in plain text, in the `deleted_accounts` table.
 
    It exists to stop one address opening account after account, and to stop somebody else
-   claiming an address you have given up and presenting as you to anyone who knew it. The
-   consequence for you is concrete and worth stating plainly: **once your account is
-   erased, that email address cannot be used to sign up again.** If you may want to come
-   back, keep the account rather than deleting it, or use the export first.
+   claiming an address you have given up and presenting as you to anyone who knew it.
+
+   Nothing else is in that row. No age, district, gender, budget, shortlist, documents,
+   questions, answers, or anything a model wrote about you.
+   `backend/tests/test_tombstone_and_reports.py` fixes the exact list of columns, so a
+   field added to it later fails the test rather than appearing quietly, and a second test
+   sweeps every other table in the database to confirm your address is gone from all of
+   them. The nightly reports are barred from reading this table, which a third test
+   checks.
+
+   Two consequences, both worth stating plainly. **Once your account is erased, that email
+   address cannot be used to sign up again.** And this row is the one thing deletion does
+   not remove, so if you would rather your name and address were not retained at all, the
+   only way to ensure that is not to open an account. If you may want to come back later,
+   keep the account rather than deleting it, or export your data first.
 
 Feedback you sent through the form is kept, with your account link and any email
 address you gave both removed. A report that a page is broken is about the product
