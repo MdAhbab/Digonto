@@ -178,3 +178,59 @@ def test_expansion_survives_malformed_markup() -> None:
 
 def test_expansion_of_empty_html_is_empty() -> None:
     assert discover_links("", "https://www.gov.uk/x") == []
+
+
+# --- precision rules found by crawling the real sites ------------------------
+
+
+def test_child_must_live_under_the_parent_path() -> None:
+    """Global navigation must not be mistaken for a section's own sub-pages.
+
+    Crawling gov.uk/student-visa without this returned gov.uk/browse/tax, because
+    the site-wide menu item "Money and tax" matched the "money" relevance hint.
+    """
+    html = (
+        '<a href="/browse/tax">Money and tax</a>'
+        '<a href="/browse/visas-immigration">Visas and immigration</a>'
+        '<a href="/student-visa/money">Money you need</a>'
+    )
+    assert discover_links(html, "https://www.gov.uk/student-visa") == [
+        "https://www.gov.uk/student-visa/money"
+    ]
+
+
+def test_site_root_portal_admits_any_path() -> None:
+    """For a portal that *is* the site root, the whole site is the section."""
+    html = '<a href="/finances">Financing your studies</a>'
+    assert discover_links(html, "https://www.studyinnl.org/") == [
+        "https://www.studyinnl.org/finances"
+    ]
+
+
+def test_print_views_are_skipped() -> None:
+    """A print view is the same passages at a second URL, so it would double-store."""
+    html = '<a href="/student-visa/print">Print this page</a><a href="/student-visa/apply">Apply</a>'
+    links = discover_links(html, "https://www.gov.uk/student-visa")
+    assert links == ["https://www.gov.uk/student-visa/apply"]
+
+
+def test_query_string_variants_collapse_to_one_page() -> None:
+    """gov.uk decorates its own nav with ?step-by-step-nav=<uuid>."""
+    html = (
+        '<a href="/student-visa/course">Course</a>'
+        '<a href="/student-visa/course?step-by-step-nav=cafcc40a-c1ff-4997-adb4">Course</a>'
+    )
+    assert discover_links(html, "https://www.gov.uk/student-visa") == [
+        "https://www.gov.uk/student-visa/course"
+    ]
+
+
+def test_links_inside_chrome_are_ignored() -> None:
+    html = (
+        "<nav><a href='/student-visa/money'>Money</a></nav>"
+        "<footer><a href='/student-visa/fees'>Fees</a></footer>"
+        "<main><a href='/student-visa/apply'>Apply for a student visa</a></main>"
+    )
+    assert discover_links(html, "https://www.gov.uk/student-visa") == [
+        "https://www.gov.uk/student-visa/apply"
+    ]

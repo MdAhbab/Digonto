@@ -57,7 +57,50 @@ FAILURE_THRESHOLD = 3
 # imposed on us, so it is a worker constant rather than a Settings field.
 MIN_HOST_INTERVAL_SECONDS = 3.0
 
-_STRIP_SELECTOR = "script, style, nav"
+# Chrome to remove before extracting passages.
+#
+# `script, style, nav` alone was not enough, and a live crawl showed exactly how:
+# the first passage extracted from every gov.uk page was "We use some essential
+# cookies to make this website work." A cookie banner is not a visa requirement,
+# but it is a `<p>` inside `<body>`, so it became a passage, got embedded, and was
+# retrievable — meaning a student could in principle be shown a citation to a
+# cookie notice as evidence about their visa. Site chrome has to go before the
+# content survey, not be filtered out afterwards by guessing at its wording.
+_STRIP_SELECTOR = (
+    "script, style, nav, header, footer, aside, noscript, iframe, form, "
+    "svg, button, "
+    # Cookie and consent banners. Matched on the attribute conventions these
+    # actually use, since there is no semantic element for them.
+    "[role=banner], [role=navigation], [role=complementary], "
+    "[class*=cookie], [id*=cookie], [class*=consent], [id*=consent], "
+    "[class*=banner], [class*=skip-link], [class*=breadcrumb], "
+    "[data-module*=cookie], [aria-label*=okie]"
+)
+
+# A passage shorter than this is navigation debris, a lone label, or a fragment,
+# not a statement a citation can rest on.
+MIN_PASSAGE_CHARS = 40
+
+# Status codes that mean "this host refuses automated clients", as distinct from
+# "something went wrong". Several government sites sit behind a WAF that returns
+# 403 to any non-browser client no matter how well-formed and polite the request:
+# a live check found travel.state.gov, immi.homeaffairs.gov.au and mofa.go.jp all
+# doing this while their robots.txt permits crawling.
+#
+# These are not transient, so retrying on a six-hour cron forever wastes the crawl
+# budget and hammers a host that has already said no. The portal is disabled once
+# and surfaced to a reviewer, who can register a reachable alternative — every
+# affected country in the registry has one.
+#
+# Note what is deliberately *not* done here: the User-Agent is not changed to
+# impersonate a browser. It exists to say honestly who we are and give a contact
+# address, and defeating a block by disguise would contradict the same
+# transparency this product asks of everyone else.
+_REFUSES_AUTOMATION = frozenset({401, 403})
+
+# Alternate renderings of a page we already have. Crawling these stores the same
+# passages twice under two snapshot ids.
+_DUPLICATE_VIEW = re.compile(r"/(print|printable|share|email)/?$", re.I)
 _HEADING_LEVELS = {f"h{i}": i for i in range(1, 7)}
 _CONTENT_TAGS = {"p", "li", "td", "th", "blockquote", "dd", "dt", "figcaption", "caption"}
 _WS_RE = re.compile(r"\s+")
@@ -92,12 +135,19 @@ _SKIP_SUFFIXES = (
 # Link text or href fragments that mark a page as worth following. Untargeted
 # expansion wastes the page budget on cookie policies and press releases; these
 # are the words that actually appear on the pages a visa applicant needs.
+#
+# Deliberately stems, not whole words. "financial" missed studyinnl.org's
+# "Financing your studies" and its /finances path, and "study" misses "studies",
+# which is how a genuinely relevant page gets skipped. Stems cost a little
+# precision — the path-prefix rule and the chrome strip are what supply precision
+# here — in exchange for not silently dropping the page a student needs.
 _RELEVANT_HINTS = (
-    "visa", "student", "study", "fee", "cost", "money", "financial", "fund",
-    "maintenance", "document", "requirement", "eligib", "apply", "application",
-    "deadline", "date", "scholarship", "award", "tuition", "english", "ielts",
-    "permit", "extend", "dependant", "dependent", "biometric", "interview",
-    "proof", "bank", "sponsor", "insurance", "accommodation",
+    "visa", "stud", "financ", "fee", "cost", "money", "fund", "tuition",
+    "maintenance", "docum", "requir", "eligib", "appl", "admis", "enrol",
+    "deadline", "date", "scholar", "award", "grant", "bursar",
+    "english", "ielts", "toefl", "languag",
+    "permit", "residen", "extend", "depend", "biometric", "interview",
+    "proof", "bank", "solvenc", "sponsor", "insur", "accommodat", "housing",
 )
 
 
@@ -130,6 +180,13 @@ def discover_links(html: str, base_url: str, *, limit: int = MAX_CHILD_PAGES) ->
     """
     base = urlparse(base_url)
     base_domain = registrable_domain(base.netloc)
+    # A child must live under the parent's own path. A live crawl of
+    # gov.uk/student-visa without this rule returned gov.uk/browse/tax, because
+    # the site-wide navigation link "Money and tax" matched the "money" hint. The
+    # relevance hints alone cannot tell a section's own sub-pages from a global
+    # menu that happens to use the same vocabulary; the path can.
+    base_prefix = base.path.rstrip("/")
+
     seen: set[str] = set()
     out: list[str] = []
 
@@ -137,6 +194,11 @@ def discover_links(html: str, base_url: str, *, limit: int = MAX_CHILD_PAGES) ->
         tree = HTMLParser(html)
     except Exception:  # noqa: BLE001 - malformed markup is not worth raising for
         return []
+
+    # Strip chrome before looking for links, for the same reason extraction does:
+    # headers, footers and nav are where the irrelevant same-site links live.
+    for node in tree.css(_STRIP_SELECTOR):
+        node.decompose()
 
     for node in tree.css("a"):
         href = (node.attributes or {}).get("href") or ""
@@ -151,9 +213,25 @@ def discover_links(html: str, base_url: str, *, limit: int = MAX_CHILD_PAGES) ->
             continue
         if parsed.path.lower().endswith(_SKIP_SUFFIXES):
             continue
+        # Must be a descendant of the parent's path, not merely on the same site.
+        # An empty prefix (the site root is the portal) admits any path, which is
+        # correct: for a portal like studyinnl.org the whole site is the section.
+        if base_prefix and not parsed.path.rstrip("/").startswith(f"{base_prefix}/"):
+            continue
 
-        # Drop the fragment: two links to the same page are the same fetch.
-        clean = parsed._replace(fragment="").geturl()
+        # Print views duplicate a page's content at a different URL, so they would
+        # be crawled, hashed, and embedded as a second copy of passages already
+        # held — inflating the store and letting the same fact be cited twice from
+        # two snapshots.
+        if _DUPLICATE_VIEW.search(parsed.path):
+            continue
+
+        # Drop the fragment *and* the query string. gov.uk decorates its own
+        # navigation with `?step-by-step-nav=<uuid>`, which made
+        # `/student-visa/course` and `/student-visa/course?step-by-step-nav=...`
+        # look like two different pages. Query strings on these registries are
+        # navigation state, not content identity.
+        clean = parsed._replace(fragment="", query="").geturl()
         if clean in seen or clean.rstrip("/") == base_url.rstrip("/"):
             continue
 
@@ -217,7 +295,7 @@ def normalise_and_extract(html: str) -> tuple[str, list[dict[str, Any]]]:
         if tag not in _CONTENT_TAGS:
             continue
         text = _collapse_ws(node.text(deep=True, separator=" ", strip=True))
-        if not text:
+        if len(text) < MIN_PASSAGE_CHARS:
             continue
         passages.append(
             {
@@ -331,7 +409,13 @@ async def crawl_portal(
 
     try:
         response = await _fetch(http_client, portal["url"])
-    except Exception as exc:  # noqa: BLE001 - every fetch failure mode lands here
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in _REFUSES_AUTOMATION:
+            await _record_blocked(portals, bus, portal, exc.response.status_code)
+            return
+        await _record_failure(portals, bus, portal, exc)
+        return
+    except Exception as exc:  # noqa: BLE001 - every other fetch failure mode
         await _record_failure(portals, bus, portal, exc)
         return
 
@@ -533,3 +617,42 @@ async def _record_failure(
             subject_type="portal",
             subject_id=portal["public_id"],
         )
+
+
+async def _record_blocked(
+    portals: PortalRepo, bus: EventBus, portal: dict[str, Any], status_code: int
+) -> None:
+    """Record a host that refuses automated clients, and stop asking.
+
+    Distinct from `_record_failure`: this is a decision by the host, not an
+    outage, so there is nothing to retry into. The portal is disabled immediately
+    rather than after FAILURE_THRESHOLD attempts, and the event carries the status
+    code so a reviewer can see it was a refusal rather than a timeout.
+    """
+    await portals.patch(
+        portal["id"],
+        {
+            "enabled": 0,
+            "last_fetch_at": utc_now_iso(),
+            "last_status": "unreachable",
+            "consecutive_failures": FAILURE_THRESHOLD,
+        },
+    )
+    log.warning(
+        "portal refuses automated clients, disabling portal_id=%s url=%s http=%d",
+        portal["id"], portal["url"], status_code,
+    )
+    await bus.publish(
+        EventType.PORTAL_UNREACHABLE,
+        payload={
+            "portal_id": portal["id"],
+            "portal_public_id": portal["public_id"],
+            "http_status": status_code,
+            "reason": "host refuses automated clients; disabled, needs a human to "
+                      "register a reachable alternative",
+            "disabled": True,
+        },
+        actor="worker:crawler",
+        subject_type="portal",
+        subject_id=portal["public_id"],
+    )
