@@ -12,6 +12,31 @@ from typing import Any
 from app.db.connection import Database
 from app.repositories._util import new_ulid, utc_now_iso
 
+# Columns `patch` may write. Identity (id, public_id, url), provenance
+# (discovered_from_portal_id, discovered_at) and created_at are deliberately absent:
+# changing a portal's URL under a snapshot would repoint every citation that already
+# resolves through it, which is the one thing the Truth Ledger may not permit.
+_PATCHABLE_COLUMNS = frozenset(
+    {
+        "kind",
+        "country_code",
+        "label",
+        "parser_key",
+        "crawl_cron",
+        "enabled",
+        "last_fetch_at",
+        "last_status",
+        "consecutive_failures",
+        # Conditional-request validators (018_portal_validators.sql).
+        "etag",
+        "last_modified",
+    }
+)
+
+# Mirrors PortalStatus in app/models/ledger.py and in frontend/src/app/lib/api.ts.
+# Migration 018 explains why 'unchanged' now means "the host answered 304".
+_PORTAL_STATUSES = frozenset({"ok", "unchanged", "unreachable", "parse_failed"})
+
 
 class PortalRepo:
     def __init__(self, db: Database) -> None:
@@ -123,8 +148,22 @@ class PortalRepo:
         return [dict(r) for r in rows]
 
     async def patch(self, portal_id: int, fields: dict[str, Any]) -> None:
+        """Update crawl bookkeeping on one portal.
+
+        The column names are interpolated into the statement, because a column name
+        cannot be a bound parameter in SQL. Values are always bound, so nothing a
+        portal serves can reach the statement text; but the allowlist below closes
+        the remaining shape, which is a future caller passing a key that came from
+        somewhere less controlled than this module's own literals. It also fails a
+        typo loudly instead of writing a column that does not exist.
+        """
         if not fields:
             return
+        unknown = set(fields) - _PATCHABLE_COLUMNS
+        if unknown:
+            raise ValueError(f"portals.patch: not a patchable column: {sorted(unknown)}")
+        if "last_status" in fields and fields["last_status"] not in _PORTAL_STATUSES:
+            raise ValueError(f"portals.last_status: {fields['last_status']!r} is not a status")
         sets = ", ".join(f"{k} = ?" for k in fields.keys())
         await self._db.execute(
             f"UPDATE portals SET {sets} WHERE id = ?", (*fields.values(), portal_id)

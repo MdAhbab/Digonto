@@ -54,6 +54,12 @@ _LEARNING_CYCLE_INTERVAL_DAYS = 21
 _TRAINING_JOB_POLL_MINUTES = 30
 _NIGHTLY_RETENTION_CRON = "17 3 * * *"  # 03:17 UTC: off-peak, off the hour
 
+# Random offset applied to every portal's scheduled crawl. Thirty minutes across 31
+# portals leaves the effective rate under two starts a minute even in the worst
+# draw, and is small enough that a source on a daily cron is still checked on the
+# day its cron names.
+_CRAWL_JITTER_SECONDS = 1800
+
 
 class WorkerApp:
     def __init__(self) -> None:
@@ -150,6 +156,17 @@ class WorkerApp:
                 replace_existing=True,
                 max_instances=1,
                 coalesce=True,
+                # Every portal in migration 015 carries one of two cron
+                # expressions, so twenty of them are due at 00:00 and eleven at
+                # each six-hour mark. `max_instances=1` bounds one job re-entering
+                # itself, not the number of distinct jobs, so without jitter the
+                # worker opened twenty connections at once from a one-CPU VM,
+                # several of them to the same host. Jitter is the right layer for
+                # this: the cron stays a readable statement of how often a source
+                # should be checked, and nothing has to renumber 31 rows to spread
+                # them out. crawler.MAX_CONCURRENT_FETCHES is the hard backstop for
+                # the case where the random offsets happen to cluster.
+                jitter=_CRAWL_JITTER_SECONDS,
                 kwargs={
                     "portal_id": portal["id"],
                     "dbs": self.dbs,

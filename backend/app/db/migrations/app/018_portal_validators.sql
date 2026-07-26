@@ -1,0 +1,37 @@
+-- Conditional-request state, so a re-crawl can ask "has this changed?" instead of
+-- downloading the page again to find out.
+--
+-- The crawler's cheap path was only cheap on our side. It fetched the whole body
+-- every cycle, hashed it, compared, and usually discarded the body. For 27 portals
+-- on a six-hour cron that is roughly a hundred full page downloads a day from
+-- government hosts, to learn something the host will state in a 150-byte 304 if
+-- asked with the validators it handed us itself.
+--
+-- HTTP has specified the answer since 1997: store the ETag and Last-Modified a
+-- host returned, send them back as If-None-Match and If-Modified-Since, and let
+-- the host answer 304 Not Modified. It is faster for us, it costs the host almost
+-- nothing, and for a watcher that three government WAFs have already refused it
+-- is the most useful evidence of good behaviour we can put on the wire.
+--
+-- Stored on portals rather than snapshots: a validator describes the current state
+-- of a URL, not a historical capture of one, and there is exactly one current
+-- state. Both are nullable because most hosts send one or the other, not both, and
+-- a host may stop sending either at any time.
+ALTER TABLE portals ADD COLUMN etag TEXT;
+ALTER TABLE portals ADD COLUMN last_modified TEXT;
+
+-- No CHECK constraint change is needed for the new outcome, and that is worth
+-- stating explicitly so nobody adds one later.
+--
+-- `portals.last_status` already permits 'unchanged' (003_knowledge.sql), the
+-- Literal in app/models/ledger.py already lists it, and so does PortalStatus in
+-- frontend/src/app/lib/api.ts. Nothing ever wrote it: the crawler recorded 'ok'
+-- whether the hash matched or not. So the value existed, was permitted end to end,
+-- and had no meaning attached.
+--
+-- It now means "the host said 304 and we never saw a body", which is a genuinely
+-- different operational fact from 'ok' ("we downloaded the page"). A portal that
+-- has reported 'unchanged' for months is either honestly stable or is serving a
+-- stale ETag behind a changed page, and a reviewer needs to be able to see the
+-- difference. 'ok' still covers both a real change and a downloaded body whose
+-- hash matched, because in both of those cases extraction is known to have run.

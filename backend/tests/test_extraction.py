@@ -136,3 +136,135 @@ def test_empty_and_bodyless_html_do_not_raise() -> None:
     for html in ("", "<html></html>", "<p>fragment with no body element at all here</p>"):
         normalised, passages = normalise_and_extract(html)
         assert isinstance(normalised, str) and isinstance(passages, list)
+
+
+# --- Content region, and repeats within one page -----------------------------
+
+
+def test_the_content_region_is_preferred_over_the_whole_body() -> None:
+    """Stripping chrome removes what is recognisably chrome.
+
+    A page also carries parts that are neither chrome nor content: a related-links
+    rail, a feedback panel, a "last updated" block. Those use none of the
+    conventions _STRIP_SELECTOR knows, so they survived the strip and became
+    passages. Selecting the content region positively excludes them.
+    """
+    html = """
+    <html><body>
+      <div class="related-items">
+        <p>Related content: Skilled Worker visa, Graduate visa, Visitor visa guidance.</p>
+      </div>
+      <main>
+        <h1>Student visa</h1>
+        <p>You must have enough money to pay your course fees for one academic year.</p>
+        <p>You must also have enough money to support yourself while you are studying,
+           and the amount depends on whether your course is inside or outside London.</p>
+        <p>You will usually need to prove you have held the money for 28 consecutive days
+           ending no more than 31 days before you apply.</p>
+      </main>
+      <div class="feedback">
+        <p>Is this page useful? Report a problem with this page and we will fix it.</p>
+      </div>
+    </body></html>
+    """
+    texts = _texts(html)
+    assert any("course fees" in t for t in texts)
+    assert not any("Related content" in t for t in texts)
+    assert not any("Is this page useful" in t for t in texts)
+
+
+def test_a_decorative_main_does_not_reduce_the_page_to_nothing() -> None:
+    """A site that wraps a sidebar in <main> must not cost us the page.
+
+    The floor means the body is used instead, which is the previous behaviour and
+    is never worse than returning nothing.
+    """
+    html = """
+    <html><body>
+      <main><p>Menu</p></main>
+      <div id="page">
+        <h1>Student visa</h1>
+        <p>You need to show 1,483 pounds per month for up to nine months in London.</p>
+        <p>You must also pay the immigration health surcharge before you travel.</p>
+      </div>
+    </body></html>
+    """
+    texts = _texts(html)
+    assert any("1,483 pounds" in t for t in texts)
+
+
+def test_text_repeated_across_a_page_becomes_one_passage() -> None:
+    """Government pages repeat a standing sentence in several sections.
+
+    Each copy used to be embedded, stored and retrieved separately, so one fact
+    could occupy several of the shortlist slots a grounded answer chooses from.
+    """
+    standing = (
+        "You must show you have enough money to support yourself for the whole course."
+    )
+    html = f"""
+    <html><body><main>
+      <h2>Money</h2><p>{standing}</p>
+      <h2>Documents</h2><p>{standing}</p>
+      <h2>Applying</h2><p>{standing}</p>
+      <p>Fees are set by your university and are not refundable after enrolment.</p>
+    </main></body></html>
+    """
+    _n, passages = normalise_and_extract(html)
+    texts = [p["text"] for p in passages]
+    assert texts.count(standing) == 1
+    assert len(passages) == 2
+    # Ordinals stay dense and start at zero: `passages` is UNIQUE (snapshot_id,
+    # ordinal), and a gap would make the diff between two snapshots read as a move.
+    assert [p["ordinal"] for p in passages] == [0, 1]
+    # The kept copy is the first, so its section_path is the section it first
+    # appeared under rather than an arbitrary later one.
+    assert passages[0]["section_path"] == "Money"
+
+
+def test_deduplication_is_by_exact_text_not_by_similarity() -> None:
+    """Two passages that differ by a number are two different facts."""
+    html = """
+    <html><body><main>
+      <p>You need 1,483 pounds per month for up to nine months if you study in London.</p>
+      <p>You need 1,136 pounds per month for up to nine months if you study elsewhere.</p>
+    </main></body></html>
+    """
+    assert len(_texts(html)) == 2
+
+
+def test_screen_reader_only_text_does_not_double_a_section_path() -> None:
+    """From a live crawl of study-in-germany.de.
+
+    The heading is `<span class="sr-only">Step 1: Determine the type of
+    Stay</span>Determine the type of Stay`, and deep text extraction concatenated
+    both copies, so every citation under it read "Step 1: Determine the type of Stay
+    Determine the type of Stay". The visible copy is the one kept, because a citation
+    should read the way the page reads when a student opens it.
+    """
+    html = """
+    <html><body><main>
+      <h2 class="chapter-headline__text">
+        <span class="sr-only">Step 1: Determine the type of Stay</span>
+        Determine the type of Stay
+      </h2>
+      <p>Are you planning to come to Germany before, during or after your studies?</p>
+    </main></body></html>
+    """
+    _n, passages = normalise_and_extract(html)
+    assert passages[0]["section_path"] == "Determine the type of Stay"
+
+
+def test_the_other_hidden_text_conventions_are_stripped_too() -> None:
+    """gov.uk uses govuk-visually-hidden at scale for link and skip-link annotations."""
+    html = """
+    <html><body><main>
+      <h2>Money you need<span class="govuk-visually-hidden"> (opens in a new tab)</span></h2>
+      <p>You must have 1,483 pounds per month for up to nine months to study in London.</p>
+      <p aria-hidden="true">Decorative duplicate of the sentence above for layout only.</p>
+      <p class="screen-reader-text">Announcement read only to assistive technology users.</p>
+    </main></body></html>
+    """
+    _n, passages = normalise_and_extract(html)
+    assert passages[0]["section_path"] == "Money you need"
+    assert len(passages) == 1
