@@ -2,6 +2,13 @@
 
 Self-contained IEEE paper source. Nothing outside this folder is needed.
 
+> **`digonto.tex` is on the development machine only.** `.gitignore` excludes
+> `*.tex`, so the paper source is never published from this public repository.
+> This README and `references.bib` are tracked, because a verified bibliography is
+> useful on its own. If you clone this repository on another machine, the LaTeX
+> file will not come with it. The readable mirror at `paper/research_paper.md` is
+> tracked and carries the same text.
+
 ## Contents
 
 | File | Purpose |
