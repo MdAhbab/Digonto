@@ -10,6 +10,30 @@ A free, Bangla-first Study Abroad and Visa Navigator for Bangladeshi students. I
 
 React 18 + Vite, Tailwind CSS, Three.js, GSAP (with ScrollTrigger), Lenis smooth scroll. Permitted additions: Framer Motion for micro-interactions, Radix UI primitives for accessible components, TanStack Query for data, Zustand for state, next-themes-style class strategy for theming. Fonts via self-hosted files (no external font CDNs at runtime).
 
+> **What was actually built, and why it differs.** This section is the original
+> brief; the build diverged from it deliberately in four places, and the code is
+> the authority.
+>
+> - **Lenis: not used.** Inertia scroll fights the reading-first layouts that most
+>   of this product turned out to need, and it adds a scroll-hijack that hurts on
+>   the mid-range Android this is built for. Native scrolling, with GSAP
+>   ScrollTrigger for the one pinned hero scene.
+> - **TanStack Query: not used.** Data access is `src/app/lib/api.ts` — a typed
+>   client with in-memory access tokens, an HttpOnly refresh cookie, single-flight
+>   refresh on 401, and POST-based SSE (EventSource cannot set an Authorization
+>   header). That last requirement is the deciding one: the streaming answer
+>   surface is the product's centrepiece and does not fit a query cache. Adding
+>   TanStack alongside it would mean two data layers.
+> - **Zustand: not used.** Shared state is three React contexts (auth, theme,
+>   i18n) and nothing else is global. A store would be ceremony over `useState`.
+> - **next-themes: not used.** `lib/theme.tsx` implements the same class strategy
+>   directly, which is a few dozen lines and avoids a dependency.
+>
+> Radix (dialog, progress) and Framer Motion *are* used. Of the 48 shadcn/Radix
+> components originally generated, 44 were never imported and have been deleted
+> along with 34 unused dependencies; only `drawer`, `progress`, `sheet` and the
+> `cn` helper survived.
+
 ## 2. Aesthetic direction
 
 Target the register of an ultra-premium modern law firm: restraint, weight, generous negative space, editorial typography, and confidence. Think engraved letterhead translated to screen. Explicitly avoid the generic AI-generated look: no purple-to-blue gradients on dark backgrounds, no glassmorphism cards floating over blurred blobs, no emoji in UI copy, no rounded-2xl-shadow-xl on everything, no centered hero with two gradient buttons, no sparkles iconography.
