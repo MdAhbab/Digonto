@@ -13,8 +13,15 @@ aiosqlite==0.20.0
 redis==5.2.1
 qdrant-client==1.12.2
 
-# Background work
-arq==0.26.3
+# Background work.
+#
+# No `arq`. The pin was here from an earlier design and nothing under
+# app/workers ever imported it: the worker process runs its consumers as plain
+# asyncio tasks over `EventBus.consume` (Redis Streams, at-least-once, idempotent
+# via `applied_events`) with APScheduler for cron timing. Installing a second,
+# incompatible job queue next to the bus this build already has would be pure
+# surface area, so the pin is dropped rather than adopted. See backend/backend.md
+# section 1.
 apscheduler==3.11.0
 
 # Security

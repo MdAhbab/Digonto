@@ -61,6 +61,24 @@ class TaskKind(str, enum.Enum):
     def is_core(self) -> bool:
         return self in _CORE_KINDS
 
+    @property
+    def num_ctx(self) -> int:
+        """Context window to request for this kind of call.
+
+        This has to be set explicitly. `gemma4:e2b` advertises a 131,072-token
+        context, and the KV cache for a window that size is far larger than the
+        weights: leaving it unset means the footprint is whatever the Ollama
+        build happens to default to, which makes memory on the deployment VM
+        non-deterministic and, on a bad default, fatal.
+
+        Ollama allocates the KV cache per slot from the largest `num_ctx` it has
+        been asked for, so the ceiling matters more than the average. These
+        values are sized to what each task actually needs: a classification sees
+        two short passages, a grounded answer sees four reranked passages plus
+        two answers, and vision calls carry image tokens.
+        """
+        return _NUM_CTX.get(self, 4096)
+
 
 _CORE_KINDS = frozenset(
     {
@@ -72,6 +90,30 @@ _CORE_KINDS = frozenset(
         TaskKind.ELIGIBILITY_SCORE,
     }
 )
+
+# Per-kind context windows. Deliberately modest: on a CPU-only 8 GB VM the KV
+# cache competes directly with the model weights, and every one of these tasks
+# has a bounded, known prompt shape. Raise a single entry when a real prompt is
+# measured against it, never the whole table for headroom.
+_NUM_CTX: dict[TaskKind, int] = {
+    # Four reranked passages (capped at 12k chars each by the framing helper is
+    # the worst case, but reranking cuts to 4 and passages are ~1-2k chars),
+    # a system prompt, and two full answers out.
+    TaskKind.GROUNDED_ANSWER: 8192,
+    TaskKind.AGENT_TOOL: 8192,
+    # Two fenced passage diffs and a one-object reply.
+    TaskKind.CLASSIFY_CHANGE: 4096,
+    # Image tokens dominate; a single page at Gemma's tiling is the driver.
+    TaskKind.VISION_EXTRACT: 8192,
+    TaskKind.INTERVIEW_SCORE: 8192,
+    TaskKind.ELIGIBILITY_SCORE: 8192,
+    # Chrome. A few hundred tokens in, a few dozen out.
+    TaskKind.NORMALISE_QUERY: 2048,
+    TaskKind.TRANSLITERATE: 2048,
+    TaskKind.TITLE_CONVERSATION: 2048,
+    TaskKind.SUGGEST_FOLLOWUP: 2048,
+    TaskKind.SUMMARISE_SHORT: 4096,
+}
 
 
 class DocumentContentLeak(RuntimeError):
@@ -157,6 +199,9 @@ class GemmaProvider:
             "options": {
                 "temperature": req.temperature,
                 "num_predict": req.max_tokens,
+                # Pinned per task kind rather than left to the server default.
+                # See TaskKind.num_ctx for why this is not optional.
+                "num_ctx": req.kind.num_ctx,
             },
             "keep_alive": self._s.ollama_keep_alive,
         }
@@ -287,14 +332,26 @@ class GeminiProvider:
 
 
 class ModelRouter:
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        *,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
         self._s = settings or get_settings()
-        self._client = httpx.AsyncClient()
+        # A caller that already owns an httpx client should pass it: the router
+        # is constructed once per process, and the remote-provider budget below
+        # only means anything while the instance lives. Building a router (and
+        # therefore a fresh budget) per request would reset the daily ceiling on
+        # every call.
+        self._client = client or httpx.AsyncClient()
+        self._owns_client = client is None
         self.gemma = GemmaProvider(self._s, self._client)
         self.gemini = GeminiProvider(self._s, self._client)
 
     async def aclose(self) -> None:
-        await self._client.aclose()
+        if self._owns_client:
+            await self._client.aclose()
 
     def _preferred(self, req: LLMRequest) -> str:
         # Anything touching documents is local, unconditionally.

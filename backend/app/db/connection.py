@@ -28,14 +28,30 @@ import aiosqlite
 
 log = logging.getLogger(__name__)
 
+# Applied to every connection. Two of these are memory decisions and are sized
+# for the deployment target, not for a database server.
+#
+# `cache_size` is per connection and is not shared between them. At the previous
+# -64000 (64 MB) and 13 connections across the three files, SQLite could claim
+# ~832 MB of page cache on a machine whose RAM is budgeted around a resident
+# 7.2 GB model. -8000 (8 MB) per connection caps the total near 104 MB, which is
+# ample for a working set of this size: the databases hold metadata only, since
+# rule 4 keeps blobs out on the encrypted volume.
+#
+# `mmap_size` is different: it maps the file, so connections to the same file
+# share those pages and the cost is bounded by file size rather than multiplied
+# by connection count. 64 MB is well above the expected size of these files.
 PRAGMAS = (
     "PRAGMA journal_mode=WAL",
     "PRAGMA synchronous=NORMAL",
     "PRAGMA foreign_keys=ON",
     "PRAGMA busy_timeout=5000",
     "PRAGMA temp_store=MEMORY",
-    "PRAGMA mmap_size=268435456",
-    "PRAGMA cache_size=-64000",
+    "PRAGMA mmap_size=67108864",
+    "PRAGMA cache_size=-8000",
+    # Bound the WAL. Without this a long-lived reader can hold checkpointing back
+    # and let the -wal file grow without limit, which Litestream then replicates.
+    "PRAGMA journal_size_limit=16777216",
 )
 
 
