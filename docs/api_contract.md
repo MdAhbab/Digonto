@@ -578,8 +578,9 @@ vault metadata delivered by email link, is not implemented: nothing in this
 codebase assembles that archive or sends the email. Section 16 lists this
 explicitly.
 
-**DELETE `/me`** — requires the current password in the body, not an OTP (this
-system has no OTP subsystem at all; see section 3). Deletes vault files,
+**DELETE `/me`** — requires the current password in the body, not a one-time
+password (OTP), because this system has no OTP subsystem at all; see section
+3. Deletes vault files,
 cascades `app.db`, anonymises `events.db` rows rather than deleting them (the
 audit trail survives without identifying anyone), deletes replay samples, and
 emits `user.deleted`. Returns `202` with a receipt in the response body; no
