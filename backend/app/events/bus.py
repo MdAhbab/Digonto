@@ -47,10 +47,21 @@ class EventStream(str, enum.Enum):
 class EventType(str, enum.Enum):
     """Every event named in docs/database.md and backend/backend.md section 2.1.
 
-    `USER_DELETED` is the one addition beyond backend.md's table: it is named
+    `USER_DELETED` is one addition beyond backend.md's table: it is named
     explicitly in docs/database.md sections 7 and 13 ("write a final
     user.deleted event") but was left off the section 2.1 catalogue, so it is
     placed on the `user` stream alongside the other account-scoped events.
+
+    `PLAN_CHANGED`, `AUDIT_UPDATED`, `FUNDING_UPDATED`, `USER_SUSPENDED`,
+    `USER_BANNED`, and `USER_REINSTATED` are six more additions, found while
+    wiring the router layer to the (authoritative, unmodified)
+    app/services/*.py files: `planner_service.simulate`,
+    `vault_service.start_audit`, `funding_service.rematch`/`add_source`/
+    `remove_source`, and `moderation_service.suspend_user`/`ban_user`/
+    `reinstate_user` all reference one of these on `EventType` that did not
+    exist, which raised `AttributeError` the moment any of those methods
+    ran. Every other one of this module's 25 call sites across the service
+    layer already matched a real member.
     """
 
     # ev:crawl
@@ -73,8 +84,14 @@ class EventType(str, enum.Enum):
     # ev:user
     VAULT_DOC_ADDED = "vault.doc.added"
     PLAN_STEP_CHANGED = "plan.step.changed"
+    PLAN_CHANGED = "plan.changed"
     PROFILE_UPDATED = "profile.updated"
     USER_DELETED = "user.deleted"
+    AUDIT_UPDATED = "audit.updated"
+    FUNDING_UPDATED = "funding.updated"
+    USER_SUSPENDED = "user.suspended"
+    USER_BANNED = "user.banned"
+    USER_REINSTATED = "user.reinstated"
     # ev:learn
     REPLAY_SAMPLE_ADDED = "replay.sample.added"
     ADAPTER_TRAINED = "adapter.trained"
@@ -98,8 +115,14 @@ _STREAM_BY_TYPE: dict[EventType, EventStream] = {
     EventType.AGENT_FAILED: EventStream.AGENT,
     EventType.VAULT_DOC_ADDED: EventStream.USER,
     EventType.PLAN_STEP_CHANGED: EventStream.USER,
+    EventType.PLAN_CHANGED: EventStream.USER,
     EventType.PROFILE_UPDATED: EventStream.USER,
     EventType.USER_DELETED: EventStream.USER,
+    EventType.AUDIT_UPDATED: EventStream.USER,
+    EventType.FUNDING_UPDATED: EventStream.USER,
+    EventType.USER_SUSPENDED: EventStream.USER,
+    EventType.USER_BANNED: EventStream.USER,
+    EventType.USER_REINSTATED: EventStream.USER,
     EventType.REPLAY_SAMPLE_ADDED: EventStream.LEARN,
     EventType.ADAPTER_TRAINED: EventStream.LEARN,
     EventType.ADAPTER_PROMOTED: EventStream.LEARN,
@@ -118,14 +141,13 @@ class EventBus:
 
     async def publish(
         self,
-        stream: EventStream | str,
         type: EventType | str,  # noqa: A002 - matches the spec'd parameter name
-        payload: dict[str, Any],
-        actor: str,
-        user_id: int | None = None,
         *,
+        payload: dict[str, Any],
+        user_id: int | None = None,
         subject_type: str | None = None,
         subject_id: str | None = None,
+        actor: str | None = None,
         schema_version: int = 1,
     ) -> str:
         """Publish one event. Returns the ULID event_id.
@@ -135,16 +157,23 @@ class EventBus:
         ... not the bus"), so if only one of the two writes can succeed, the
         one that must not be silently lost is the durable one, not the
         delivery.
-        """
-        stream_enum = stream if isinstance(stream, EventStream) else EventStream(stream)
-        type_enum = type if isinstance(type, EventType) else EventType(type)
 
-        expected_stream = _STREAM_BY_TYPE.get(type_enum)
-        if expected_stream is not None and expected_stream is not stream_enum:
-            raise ValueError(
-                f"event type {type_enum.value!r} belongs on stream "
-                f"{expected_stream.value!r}, not {stream_enum.value!r}"
-            )
+        Signature note: this used to take `stream` and `actor` as separate
+        required parameters, ahead of `type`/`payload` positionally. Every
+        one of this module's 25 call sites across app/services/*.py
+        (authoritative, not modified here) calls it as
+        `publish(EventType.X, user_id=..., subject_type=..., subject_id=...,
+        payload=...)`, i.e. `type` positional and everything else by
+        keyword, never `stream` or `actor`. Since `_STREAM_BY_TYPE` already
+        maps every `EventType` to exactly one `EventStream` (a passed-in
+        `stream` could only ever be redundant with it or wrong), `stream` is
+        now derived rather than accepted, and `actor` defaults to
+        `"user:<id>"`/`"system"` rather than being required, matching how
+        every caller actually uses this method.
+        """
+        type_enum = type if isinstance(type, EventType) else EventType(type)
+        stream_enum = _STREAM_BY_TYPE[type_enum]
+        resolved_actor = actor or (f"user:{user_id}" if user_id is not None else "system")
 
         event_id = str(ULID())
         created_at = _now_iso()
@@ -158,7 +187,7 @@ class EventBus:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                event_id, stream_enum.value, type_enum.value, actor,
+                event_id, stream_enum.value, type_enum.value, resolved_actor,
                 subject_type, subject_id, user_id, payload_json,
                 schema_version, created_at,
             ),
@@ -170,7 +199,7 @@ class EventBus:
             {
                 "event_id": event_id,
                 "type": type_enum.value,
-                "actor": actor,
+                "actor": resolved_actor,
                 "user_id": "" if user_id is None else str(user_id),
                 "subject_type": subject_type or "",
                 "subject_id": subject_id or "",

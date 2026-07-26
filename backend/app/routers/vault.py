@@ -43,7 +43,7 @@ from fastapi.responses import StreamingResponse
 from app.config import get_settings
 from app.db.connection import Databases
 from app.deps import RateLimit, get_bus, get_current_user, get_dbs, get_router
-from app.errors import NotFound, Unauthorized
+from app.errors import Unauthorized
 from app.events.bus import EventBus
 from app.llm.router import ModelRouter
 from app.models.common import Page, SnapshotCitation
@@ -119,6 +119,23 @@ async def _resolve_document_public_id(
     for doc in await documents.list_for_user(user_id):
         if doc["id"] == internal_id:
             return doc["public_id"]
+    return None
+
+
+def _parse_json_object(value: Any) -> dict[str, Any] | None:
+    """`audit_findings.evidence` (docs/database.md section 3.6) is stored as
+    a JSON TEXT column; the repo hands back the raw string, but
+    `AuditFindingOut.evidence` is typed `dict | None`."""
+    import json
+
+    if value is None or isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
     return None
 
 
@@ -299,7 +316,7 @@ async def get_latest_audit(
                 title_bn=f["title_bn"],
                 detail_en=f["detail_en"],
                 detail_bn=f["detail_bn"],
-                evidence=f.get("evidence"),
+                evidence=_parse_json_object(f.get("evidence")),
                 action_en=f.get("action_en"),
                 action_bn=f.get("action_bn"),
                 citation=await _citation_from_snapshot_id(snapshots, f.get("snapshot_id")),

@@ -59,6 +59,17 @@ router = APIRouter(
     dependencies=[Depends(RateLimit("interview_default", limit=120, window_s=60))],
 )
 
+# A separate, dependency-free router for the WebSocket route only.
+# `APIRouter(dependencies=[...])` applies those dependencies to every route
+# added to it, including a `@router.websocket(...)` one, and `RateLimit`
+# (like `get_dbs`/`get_bus`/`get_router`/`get_current_user`) takes a
+# `Request`, which cannot be resolved for a websocket connection (see
+# `interview_ws`'s own docstring below for the exact FastAPI mechanics).
+# Mounting the HTTP rate limit on this router would make every WS handshake
+# fail with a `TypeError` before `interview_ws` ever runs its own explicit
+# auth check.
+ws_router = APIRouter(prefix="/interview", tags=["interview"])
+
 
 def get_interview_service(
     dbs: Databases = Depends(get_dbs),
@@ -147,7 +158,7 @@ async def _authenticate_ws(websocket: WebSocket, dbs: Databases) -> Mapping[str,
 _active_ws_users: set[int] = set()
 
 
-@router.websocket("/sessions/{session_id}/ws")
+@ws_router.websocket("/sessions/{session_id}/ws")
 async def interview_ws(websocket: WebSocket, session_id: str) -> None:
     # Not `Depends(get_dbs)`/`Depends(get_bus)`/`Depends(get_router)`: those
     # three dependencies (app/deps.py, not modified here) declare a

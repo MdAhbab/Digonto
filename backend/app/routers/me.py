@@ -76,9 +76,19 @@ async def patch_profile(
     user: Mapping = Depends(get_current_user),
     profiles: ProfileService = Depends(get_profile_service),
 ) -> ProfileOut:
-    updated = await profiles.update_profile(
-        user["id"], user["public_id"], body.model_dump(exclude_unset=True)
-    )
+    fields = body.model_dump(exclude_unset=True)
+    if "study_gap_years" not in fields and await profiles.get_profile(user["id"]) is None:
+        # `profiles.study_gap_years` is `NOT NULL DEFAULT 0`
+        # (docs/database.md section 3.2), but `ProfileRepo.upsert`'s INSERT
+        # branch always names this column explicitly with whatever
+        # `fields.get(...)` returns, including `None`, which overrides the
+        # column's own SQL-level DEFAULT and raises an IntegrityError on the
+        # very first PATCH for a new user unless something supplies 0.
+        # Never injected for an *existing* profile: PATCH must only ever
+        # touch fields the caller actually sent, and this would otherwise
+        # silently reset a real value back to 0.
+        fields["study_gap_years"] = 0
+    updated = await profiles.update_profile(user["id"], user["public_id"], fields)
     return ProfileOut(**updated)
 
 
@@ -95,6 +105,40 @@ async def put_consents(
         user["id"], improve_model=body.improve_model, usage_analytics=body.usage_analytics
     )
     return User(**updated)
+
+
+@router.post("/consents/withdraw", status_code=status.HTTP_202_ACCEPTED, response_model=None)
+async def withdraw_consent(
+    user: Mapping = Depends(get_current_user),
+    auth_service: AuthService = Depends(get_auth_service),
+) -> None:
+    """docs/api_contract.md section 13: withdrawing `improve_model` must
+    delete the user's replay samples and flag every adapter trained on them
+    for review, not merely flip a boolean, because "you can withdraw
+    consent" is meaningless if the data already trained a model.
+
+    No repository anywhere in this codebase (see app/repositories/*.py)
+    exposes "delete a user's replay samples" or "flag adapters trained on a
+    given sample set for review"; `AuthService.update_consents` only ever
+    updates the `user_consents` row. The one place in the whole codebase
+    that touches `learn.db.replay_samples` for a user is
+    `AuthService.delete_account`, which does it with a raw SQL DELETE
+    against a `Database` handle passed in by app/main.py's lifespan, not
+    through a repository, and only as part of full account deletion.
+
+    Flipping `improve_model` to `False` here without also deleting the
+    samples would be worse than not implementing this endpoint: it would
+    look like the privacy promise was honoured when the data a model may
+    already have trained on is untouched. Raising instead of doing that.
+    """
+    raise NotImplementedError(
+        "POST /me/consents/withdraw needs a way to delete this user's "
+        "learn.db.replay_samples and flag every learn.db.adapters row "
+        "trained on them for review. No repository exposes either "
+        "operation; app/services/auth_service.py's own delete_account is "
+        "the only code that touches replay_samples, and only for full "
+        "account deletion via a raw SQL statement, not a reusable method."
+    )
 
 
 @router.get("/export", response_model=ExportReceipt)

@@ -81,3 +81,7 @@ dist/
 .idea/
 .vscode/
 *.swp
+
+# Redis persistence written into the working tree by a local redis-server
+dump.rdb
+*.rdb

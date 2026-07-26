@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Mapping
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query
 
 from app.db.connection import Databases
 from app.deps import RateLimit, get_bus, get_current_user, get_dbs

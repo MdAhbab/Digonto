@@ -38,12 +38,6 @@ async def list_destinations(
     user: Mapping | None = Depends(get_optional_user),
     profiles: ProfileService = Depends(get_profile_service),
 ) -> Page[DestinationOut]:
-    # ProfileService.list_destinations needs a user_id to compute the
-    # `shortlisted` flag; an anonymous caller gets `0`, which matches no
-    # real user, so every country simply comes back unshortlisted rather
-    # than requiring auth for a route the contract marks public.
-    user_id = user["id"] if user is not None else 0
-
     # `countries` (docs/database.md section 3.2) has only code/name_en/
     # name_bn/visa_types/active/sort_order: no lat, lng, note_en, note_bn,
     # or citation columns, and the seed migration

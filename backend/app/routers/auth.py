@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict
 from app.config import get_settings
 from app.db.connection import Databases
 from app.deps import RateLimit, get_bus, get_current_user, get_dbs
+from app.errors import Unauthorized
 from app.events.bus import EventBus
 from app.models.auth import AuthResponse, ChangePasswordRequest, LoginRequest, SignupRequest
 from app.models.user import User

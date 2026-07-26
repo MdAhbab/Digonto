@@ -73,10 +73,21 @@ def decode_access_token(token: str, *, settings: Settings | None = None) -> dict
         raise TokenInvalid("access token is malformed or has a bad signature") from exc
 
 
-def new_refresh_token() -> tuple[str, str]:
-    """Return (raw_token, sha256_hash). Only the hash is ever persisted."""
-    raw = secrets.token_urlsafe(_REFRESH_TOKEN_BYTES)
-    return raw, hash_refresh_token(raw)
+def new_refresh_token() -> str:
+    """Return a fresh raw refresh token. Only its sha256 hash (via
+    `hash_refresh_token`) is ever persisted.
+
+    Signature note: this used to return `(raw, hash)` as a tuple, but
+    `app/services/auth_service.py` (authoritative, not modified as part of
+    the router work that found this) calls it expecting a single raw string
+    and separately calls `hash_refresh_token(refresh_plain)` itself at both
+    call sites (`_issue_tokens` and `refresh`). That module's own docstring
+    flags exactly this risk ("signatures used here are the most
+    conventional shape for each function ... in case the real signatures
+    differ"). Changed to match the caller rather than the other way around,
+    since app/services/*.py is the file this build must not modify.
+    """
+    return secrets.token_urlsafe(_REFRESH_TOKEN_BYTES)
 
 
 def hash_refresh_token(raw: str) -> str:

@@ -40,6 +40,7 @@ all_routers: list[APIRouter] = [
     vault.router,
     funding.router,
     interview.router,
+    interview.ws_router,
     moderation.router,
     meta.router,
 ]

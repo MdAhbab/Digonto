@@ -72,6 +72,34 @@ def decrypt_bytes(ciphertext: bytes, dek: bytes, nonce: bytes) -> bytes:
     return AESGCM(dek).decrypt(nonce, ciphertext, None)
 
 
+def encrypt_file(data: bytes, *, settings: Settings | None = None) -> tuple[bytes, bytes, bytes]:
+    """Whole-file convenience wrapper used by `VaultService.upload_document`.
+
+    Generates a fresh per-document DEK, encrypts `data` with it, and wraps
+    the DEK under the master key, so the caller gets everything that needs
+    to be persisted (`documents.storage_path` content, `wrapped_dek`,
+    `nonce`) from the three primitives already defined above. Not a new
+    cryptographic scheme: a composition of `generate_dek`/`encrypt_bytes`/
+    `wrap_dek`, added because `app/services/vault_service.py` (authoritative,
+    not modified here) imports this exact name and no such function existed
+    in this module.
+
+    Returns (ciphertext, wrapped_dek, nonce).
+    """
+    dek = generate_dek()
+    ciphertext, nonce = encrypt_bytes(data, dek)
+    wrapped_dek = wrap_dek(dek, settings=settings)
+    return ciphertext, wrapped_dek, nonce
+
+
+def decrypt_file(
+    ciphertext: bytes, wrapped_dek: bytes, nonce: bytes, *, settings: Settings | None = None
+) -> bytes:
+    """Inverse of `encrypt_file`: unwrap the DEK, then decrypt the file bytes."""
+    dek = unwrap_dek(wrapped_dek, settings=settings)
+    return decrypt_bytes(ciphertext, dek, nonce)
+
+
 def encrypt_field(value: str, dek: bytes) -> bytes:
     """Encrypt one extracted field value for `document_fields.value_enc`.
 
