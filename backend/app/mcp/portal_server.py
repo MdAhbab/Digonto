@@ -15,6 +15,14 @@ Tools:
   - list_watched_portals()
   - register_portal(moderator_id, url, kind, label, country_code=None,
                      parser_key="generic", crawl_cron="0 */6 * * *")
+  - search_official_sources(query)
+  - watch_official_sources(question, country_code=None)
+
+The last two reach the open web, and both are constrained by
+`app/workers/discovery.py`: only hosts on the official-domain allowlist are ever
+returned or registered, and a registered page still has to be crawled before it
+can be cited. Search never produces context for a model directly, so no tool here
+can put an uncited claim in front of a student.
 
 Run standalone: `python -m app.mcp.portal_server` (from `backend/`, so the
 `app` package resolves). See `app/mcp/README.md` for MCP client registration.
@@ -30,7 +38,14 @@ from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
 
 from app.errors import Forbidden, NotFound
-from app.mcp._common import AppContext, app_context, build_dispatcher, configure_stdio_logging
+from app.mcp._common import (
+    AppContext,
+    ToolInputError,
+    app_context,
+    build_dispatcher,
+    configure_stdio_logging,
+)
+from app.workers.discovery import discover_for_question, search_official
 
 SERVER_NAME = "digonto-portal-mcp"
 
@@ -109,11 +124,74 @@ async def _register_portal(ctx: AppContext, args: dict[str, Any]) -> dict[str, A
     return {"portal": portal}
 
 
+async def _search_official_sources(ctx: AppContext, args: dict[str, Any]) -> dict[str, Any]:
+    """Search the open web, return only allowlisted official URLs.
+
+    Read-only and side-effect free: this reports what exists, it does not add
+    anything to the watch list. Use `watch_official_sources` to do that, so an
+    agent exploring the web can never silently change what the product cites.
+    """
+    query = str(args.get("query") or "").strip()
+    if not query:
+        raise ToolInputError("query is required")
+    urls = await search_official(query, http_client=ctx.http_client)
+    return {
+        "query": query,
+        "results": urls,
+        "note": (
+            "Only sources on the official-domain allowlist "
+            "(app/workers/discovery.py) are returned. Aggregators, blogs, and "
+            "consultancy pages are excluded by design, because anything returned "
+            "here can become a cited source."
+        ),
+    }
+
+
+async def _watch_official_sources(ctx: AppContext, args: dict[str, Any]) -> dict[str, Any]:
+    """Search, then register what qualifies as watched portals.
+
+    The registered pages are not fetched here. They become ordinary portals and
+    the crawler picks them up on its own cron, so they pass through the same
+    robots, throttle, snapshot, hash, diff, and embed path as every other source.
+    That is what keeps a URL an agent found from ever short-circuiting into an
+    answer without a citable snapshot behind it.
+    """
+    question = str(args.get("question") or "").strip()
+    if not question:
+        raise ToolInputError("question is required")
+
+    country_code = args.get("country_code")
+    country_name = None
+    if country_code:
+        row = await ctx.dbs.app.fetch_one(
+            "SELECT name_en FROM countries WHERE code = ?", (country_code,)
+        )
+        country_name = row["name_en"] if row else None
+
+    portal_ids = await discover_for_question(
+        question=question,
+        country_code=country_code,
+        country_name=country_name,
+        dbs=ctx.dbs,
+        http_client=ctx.http_client,
+    )
+    return {
+        "registered_count": len(portal_ids),
+        "note": (
+            "Registered for crawling, not yet fetched. A snapshot, and therefore "
+            "a citable answer, appears only after the crawler reaches them on "
+            "their cron."
+        ),
+    }
+
+
 _HANDLERS = {
     "fetch_snapshot": _fetch_snapshot,
     "diff_snapshots": _diff_snapshots,
     "list_watched_portals": _list_watched_portals,
     "register_portal": _register_portal,
+    "search_official_sources": _search_official_sources,
+    "watch_official_sources": _watch_official_sources,
 }
 
 
@@ -191,6 +269,53 @@ _TOOLS = [
                 "crawl_cron": {"type": "string", "default": "0 */6 * * *"},
             },
             "required": ["moderator_id", "url", "kind", "label"],
+        },
+    ),
+    types.Tool(
+        name="search_official_sources",
+        description=(
+            "Search the open web for pages that could answer a study-abroad or "
+            "visa question, returning ONLY URLs on the official-domain "
+            "allowlist: government, embassy, accredited university, and the "
+            "bodies that run a named scholarship or English test. Aggregators, "
+            "blogs, forums, and consultancy sites are filtered out, because "
+            "anything returned here is a candidate cited source. Read-only: "
+            "nothing is added to the watch list and nothing is crawled."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search terms. Bangla or English both work.",
+                },
+            },
+            "required": ["query"],
+        },
+    ),
+    types.Tool(
+        name="watch_official_sources",
+        description=(
+            "Search for official sources that could answer a question and add "
+            "the qualifying ones to the watched-portal list. Use this when a "
+            "question could not be answered from existing snapshots, so the "
+            "next student who asks it can be answered with a citation. The "
+            "pages are registered, not fetched: the crawler reaches them on "
+            "their own schedule, and only then does a citable snapshot exist."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The question that had no answer, as the student asked it.",
+                },
+                "country_code": {
+                    "type": "string",
+                    "description": "Destination country, ISO-3166-1 alpha-2 lowercased, e.g. 'uk'.",
+                },
+            },
+            "required": ["question"],
         },
     ),
 ]

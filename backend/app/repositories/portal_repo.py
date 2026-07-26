@@ -63,6 +63,65 @@ class PortalRepo:
         assert result is not None
         return result
 
+    async def register_discovered(
+        self,
+        *,
+        url: str,
+        parent: dict[str, Any],
+        crawl_cron: str = "0 4 */2 * *",
+    ) -> int | None:
+        """Register a page the crawler found under `parent`. Returns its id.
+
+        Idempotent by URL: `INSERT OR IGNORE` then read back, so a page linked
+        from several parents is registered once and re-running a crawl adds
+        nothing. Returns None only if the row can neither be inserted nor found,
+        which would mean the URL was deleted concurrently.
+
+        Kind and country are inherited: a page one click inside
+        `immi.homeaffairs.gov.au/.../student-500` is the same kind of source about
+        the same country as its parent, and guessing otherwise from the URL would
+        be worse than inheriting.
+
+        The default cron is deliberately slower than a root's. Child pages are
+        numerous and change less often than the index that links them, so they
+        should not multiply the crawl budget by MAX_CHILD_PAGES.
+        """
+        label = self._child_label(url)
+        await self._db.execute(
+            """INSERT OR IGNORE INTO portals
+               (public_id, url, kind, country_code, label, parser_key, crawl_cron,
+                enabled, created_at, discovered_from_portal_id, discovered_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)""",
+            (
+                new_ulid(), url, parent["kind"], parent["country_code"], label,
+                parent["parser_key"], crawl_cron, utc_now_iso(), parent["id"],
+                utc_now_iso(),
+            ),
+        )
+        row = await self._db.fetch_one("SELECT id FROM portals WHERE url = ?", (url,))
+        return int(row[0]) if row else None
+
+    @staticmethod
+    def _child_label(url: str) -> str:
+        """A short, human label for the UI, e.g. 'gov.uk/student-visa/money'."""
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        host = parsed.netloc.removeprefix("www.")
+        path = parsed.path.rstrip("/")
+        label = f"{host}{path}"
+        # `portals.label` is shown inline in citations and the watch list, so it
+        # is trimmed from the left, keeping the end of the path that identifies
+        # the page rather than the site prefix that repeats.
+        return label if len(label) <= 60 else f"{host}/…{label[-48:]}"
+
+    async def roots_for_expansion(self) -> list[dict[str, Any]]:
+        """Enabled registry portals, i.e. those the crawler may expand from."""
+        rows = await self._db.fetch_all(
+            "SELECT * FROM portals WHERE enabled = 1 AND discovered_at IS NULL"
+        )
+        return [dict(r) for r in rows]
+
     async def patch(self, portal_id: int, fields: dict[str, Any]) -> None:
         if not fields:
             return

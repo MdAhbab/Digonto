@@ -20,7 +20,7 @@ import logging
 import re
 import time
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
 import httpx
@@ -29,7 +29,7 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 from app.config import Settings
 from app.db.connection import Databases
-from app.events.bus import EventBus, EventStream, EventType
+from app.events.bus import EventBus, EventType
 from app.repositories._util import new_ulid, utc_now_iso
 from app.repositories.portal_repo import PortalRepo
 from app.repositories.snapshot_repo import SnapshotRepo
@@ -62,6 +62,111 @@ _HEADING_LEVELS = {f"h{i}": i for i in range(1, 7)}
 _CONTENT_TAGS = {"p", "li", "td", "th", "blockquote", "dd", "dt", "figcaption", "caption"}
 _WS_RE = re.compile(r"\s+")
 _BANGLA_RE = re.compile(r"[ঀ-৿]")
+
+# --- Bounded same-site expansion --------------------------------------------
+#
+# A registered portal is a starting point, not the whole source. `gov.uk/student-visa`
+# is an index whose real content ("money", "documents you'll need", "knowledge of
+# English") sits one click down, so fetching only the registered URL captured
+# almost none of what a student actually asks about. Following links makes each
+# portal a small site crawl.
+#
+# Every bound here exists to keep that from becoming an open-ended web crawl on a
+# machine with one CPU and a politeness obligation to government sites:
+#   * same registrable domain only, so a link out is never followed;
+#   * one level down, because the value is in a section's own pages, not the
+#     whole site;
+#   * a hard page cap per portal per run;
+#   * robots.txt and the existing per-host throttle apply to every child fetch,
+#     which is what makes the cap a floor on wall-clock time too.
+MAX_CHILD_PAGES = 8
+MAX_CRAWL_DEPTH = 1
+
+# Extensions that are never worth fetching as a passage source.
+_SKIP_SUFFIXES = (
+    ".pdf", ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico",
+    ".zip", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".mp4", ".mp3", ".css", ".js", ".xml", ".json", ".rss",
+)
+
+# Link text or href fragments that mark a page as worth following. Untargeted
+# expansion wastes the page budget on cookie policies and press releases; these
+# are the words that actually appear on the pages a visa applicant needs.
+_RELEVANT_HINTS = (
+    "visa", "student", "study", "fee", "cost", "money", "financial", "fund",
+    "maintenance", "document", "requirement", "eligib", "apply", "application",
+    "deadline", "date", "scholarship", "award", "tuition", "english", "ielts",
+    "permit", "extend", "dependant", "dependent", "biometric", "interview",
+    "proof", "bank", "sponsor", "insurance", "accommodation",
+)
+
+
+def registrable_domain(host: str) -> str:
+    """Best-effort registrable domain, good enough to keep a crawl on one site.
+
+    Deliberately not a public-suffix-list dependency: this only has to answer
+    "is this the same site", and it errs toward *narrower* matching, which fails
+    closed by skipping a link rather than by wandering off the site.
+    """
+    # Strip a leading www. first, or `www.gov.uk` and `gov.uk` compare unequal and
+    # a site's links to its own bare domain look off-site.
+    host = (host or "").lower().removeprefix("www.")
+    parts = host.split(".")
+    if len(parts) <= 2:
+        return ".".join(parts)
+    # Two-part public suffixes we actually encounter on this registry:
+    # gov.uk, ac.uk, co.uk, gov.au, edu.au, go.jp, gov.bd, ac.bd, org.bd.
+    if parts[-2] in {"gov", "ac", "co", "edu", "or", "go", "org", "com", "net"} and len(parts[-1]) == 2:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+def discover_links(html: str, base_url: str, *, limit: int = MAX_CHILD_PAGES) -> list[str]:
+    """Same-site, relevance-filtered child URLs for one page.
+
+    Returned in document order and de-duplicated, so the budget is spent on the
+    links a site puts first, which on a government page is its own navigation
+    into the section rather than the footer.
+    """
+    base = urlparse(base_url)
+    base_domain = registrable_domain(base.netloc)
+    seen: set[str] = set()
+    out: list[str] = []
+
+    try:
+        tree = HTMLParser(html)
+    except Exception:  # noqa: BLE001 - malformed markup is not worth raising for
+        return []
+
+    for node in tree.css("a"):
+        href = (node.attributes or {}).get("href") or ""
+        if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
+            continue
+
+        absolute = urljoin(base_url, href)
+        parsed = urlparse(absolute)
+        if parsed.scheme not in ("http", "https"):
+            continue
+        if registrable_domain(parsed.netloc) != base_domain:
+            continue
+        if parsed.path.lower().endswith(_SKIP_SUFFIXES):
+            continue
+
+        # Drop the fragment: two links to the same page are the same fetch.
+        clean = parsed._replace(fragment="").geturl()
+        if clean in seen or clean.rstrip("/") == base_url.rstrip("/"):
+            continue
+
+        haystack = f"{parsed.path.lower()} {(node.text() or '').lower()}"
+        if not any(hint in haystack for hint in _RELEVANT_HINTS):
+            continue
+
+        seen.add(clean)
+        out.append(clean)
+        if len(out) >= limit:
+            break
+
+    return out
 
 
 def sha256_hex(text: str) -> str:
@@ -240,7 +345,6 @@ async def crawl_portal(
             portal_id, {"last_fetch_at": now, "last_status": "ok", "consecutive_failures": 0}
         )
         await bus.publish(
-            EventStream.CRAWL,
             EventType.PORTAL_FETCHED,
             payload={
                 "portal_id": portal_id,
@@ -267,6 +371,55 @@ async def crawl_portal(
     await portals.patch(
         portal_id, {"last_fetch_at": now, "last_status": "ok", "consecutive_failures": 0}
     )
+
+    # Expand only curated registry roots, and only when the page actually
+    # changed. Both conditions matter: expanding a discovered page would make the
+    # crawl unbounded in depth, and re-discovering links from an unchanged index
+    # every six hours would be pure waste, since the links cannot have moved
+    # either. `discovered_at IS NULL` is the root test rather than a NULL parent,
+    # because a portal found by search (app/workers/discovery.py) has no parent
+    # row but is still not a root.
+    if portal["discovered_at"] is None:
+        await _expand_children(
+            portal=portal, html=response.text, portals=portals, http_client=http_client
+        )
+
+
+async def _expand_children(
+    *,
+    portal: dict[str, Any],
+    html: str,
+    portals: PortalRepo,
+    http_client: httpx.AsyncClient,
+) -> None:
+    """Register up to MAX_CHILD_PAGES same-site child pages of `portal`.
+
+    Registration only. The pages are not fetched here: they become ordinary
+    portals and the scheduler crawls them on their own cron, which keeps one
+    crawl tick bounded in time no matter how many links a page has, and means a
+    child gets the same robots, throttle, snapshot, and diff treatment as
+    anything else. Discovery is therefore cheap and the work is spread out.
+    """
+    try:
+        candidates = discover_links(html, portal["url"], limit=MAX_CHILD_PAGES)
+    except Exception as exc:  # noqa: BLE001 - discovery must never fail a crawl
+        log.warning("link discovery failed portal_id=%s err=%s", portal["id"], exc)
+        return
+
+    registered = 0
+    for url in candidates:
+        # robots.txt is checked at registration as well as at fetch time, so a
+        # disallowed path never even enters the watch list a student can see.
+        if not await _robots.allowed(http_client, url):
+            continue
+        if await portals.register_discovered(url=url, parent=portal) is not None:
+            registered += 1
+
+    if registered:
+        log.info(
+            "discovered %d child page(s) under portal_id=%s (%s)",
+            registered, portal["id"], portal["label"],
+        )
 
 
 async def _write_changed_snapshot(
@@ -330,7 +483,6 @@ async def _write_changed_snapshot(
                 )
 
     await bus.publish(
-        EventStream.CRAWL,
         EventType.PORTAL_FETCHED,
         payload={"portal_id": portal["id"], "portal_public_id": portal["public_id"], "changed": True},
         actor="worker:crawler",
@@ -338,7 +490,6 @@ async def _write_changed_snapshot(
         subject_id=portal["public_id"],
     )
     await bus.publish(
-        EventStream.CRAWL,
         EventType.PORTAL_CHANGED,
         payload={
             "portal_id": portal["id"],
@@ -371,7 +522,6 @@ async def _record_failure(
     )
     if failures >= FAILURE_THRESHOLD:
         await bus.publish(
-            EventStream.CRAWL,
             EventType.PORTAL_UNREACHABLE,
             payload={
                 "portal_id": portal["id"],

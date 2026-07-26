@@ -38,7 +38,7 @@ from qdrant_client import AsyncQdrantClient
 
 from app.config import Settings
 from app.db.connection import Databases
-from app.events.bus import EventBus, EventStream, EventType
+from app.events.bus import EventBus, EventType
 from app.repositories._util import utc_now_iso
 from app.workers._kb import embed_texts
 
@@ -478,7 +478,6 @@ async def check_for_completed_jobs(
             continue
 
         await bus.publish(
-            EventStream.LEARN,
             EventType.ADAPTER_TRAINED,
             payload={"adapter_id": adapter["id"], "tag": adapter["tag"], "sample_count": adapter["sample_count"]},
             actor="worker:learner",
@@ -512,7 +511,6 @@ async def promote_adapter(
     if row is None:
         return
     await bus.publish(
-        EventStream.LEARN,
         EventType.ADAPTER_PROMOTED,
         payload={"adapter_id": adapter_id, "tag": row["tag"]},
         actor="worker:learner",
@@ -531,7 +529,6 @@ async def rollback_adapter(dbs: Databases, bus: EventBus, adapter_id: int, *, re
     if row is None:
         return
     await bus.publish(
-        EventStream.LEARN,
         EventType.ADAPTER_ROLLED_BACK,
         payload={"adapter_id": adapter_id, "tag": row["tag"], "reason": reason},
         actor="worker:learner",

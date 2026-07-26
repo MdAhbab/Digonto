@@ -26,6 +26,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 from redis.asyncio import Redis
 
 from app.config import Settings, get_settings
@@ -43,6 +44,7 @@ from app.repositories.scholarship_repo import ScholarshipRepo
 from app.repositories.snapshot_repo import SnapshotRepo
 from app.repositories.target_repo import TargetRepo
 from app.repositories.user_repo import UserRepo
+from app.workers.crawler import USER_AGENT
 from app.services.funding_service import FundingService
 from app.services.ledger_service import LedgerService
 from app.services.moderation_service import ModerationService
@@ -80,6 +82,9 @@ class AppContext:
     redis: Redis
     bus: EventBus
     router: ModelRouter
+    # Used by the portal server's official-source search. Shared rather than
+    # per-call, so the crawling User-Agent and connection pool are set once.
+    http_client: httpx.AsyncClient
 
     users: UserRepo
     portals: PortalRepo
@@ -115,6 +120,9 @@ async def app_context() -> AsyncIterator[AppContext]:
     redis_client: Redis = Redis.from_url(settings.redis_url, decode_responses=True)
     bus = EventBus(redis_client, dbs.events)
     router = ModelRouter(settings)
+    http_client = httpx.AsyncClient(
+        headers={"User-Agent": USER_AGENT}, follow_redirects=True
+    )
 
     users = UserRepo(dbs.app)
     portals = PortalRepo(dbs.app)
@@ -141,6 +149,7 @@ async def app_context() -> AsyncIterator[AppContext]:
         redis=redis_client,
         bus=bus,
         router=router,
+        http_client=http_client,
         users=users,
         portals=portals,
         snapshots=snapshots,
@@ -160,6 +169,7 @@ async def app_context() -> AsyncIterator[AppContext]:
     try:
         yield ctx
     finally:
+        await http_client.aclose()
         await router.aclose()
         await redis_client.aclose()
         await dbs.close_all()

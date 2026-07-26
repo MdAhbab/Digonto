@@ -121,7 +121,6 @@ async def _handle_portal_changed(
         # into the knowledge base; there is nothing to classify or alert on.
         for new in new_passages:
             await bus.publish(
-                EventStream.KB,
                 EventType.KB_CHUNK_UPDATED,
                 payload={
                     "passage_id": new["id"],
@@ -214,7 +213,6 @@ async def _process_one_diff(
 
     if new_id is not None:
         await bus.publish(
-            EventStream.KB,
             EventType.KB_CHUNK_UPDATED,
             payload={
                 "passage_id": new_id,
@@ -320,7 +318,6 @@ async def _notify_affected_students(
         # `/stream` SSE replay (NotificationRepo.events_since) and any
         # future timeline-reactor consumer already watch per-user for.
         await bus.publish(
-            EventStream.USER,
             EventType.PLAN_STEP_CHANGED,
             payload={"action": "portal_change", "diff_id": diff_id, "category": category},
             actor="worker:differ",

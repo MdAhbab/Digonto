@@ -204,7 +204,6 @@ async def sync_kb_version(
         await flip_alias(qdrant, KB_ALIAS, collection_name)
 
         await bus.publish(
-            EventStream.KB,
             EventType.KB_VERSION_PUBLISHED,
             payload={
                 "kb_version_id": kb_version_id,

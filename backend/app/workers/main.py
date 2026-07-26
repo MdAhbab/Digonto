@@ -36,7 +36,7 @@ from app.db.migrate import run_migrations
 from app.events.bus import EventBus
 from app.llm.router import ModelRouter
 from app.repositories.portal_repo import PortalRepo
-from app.workers import crawler, differ, embedder, learner, retention
+from app.workers import crawler, differ, discovery, embedder, learner, retention
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -87,6 +87,13 @@ class WorkerApp:
             asyncio.create_task(
                 embedder.consume(self.bus, self.dbs, self.settings, self.crawl_http, self.qdrant),
                 name="consumer:embedder",
+            ),
+            # Closes the recurrent loop: a question that could not be answered
+            # becomes a search for the source that would have answered it, and
+            # the source becomes a watched portal the crawler picks up.
+            asyncio.create_task(
+                discovery.consume(self.bus, self.dbs, self.crawl_http),
+                name="consumer:discovery",
             ),
         ]
 
