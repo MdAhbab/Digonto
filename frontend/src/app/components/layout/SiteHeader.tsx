@@ -63,12 +63,17 @@ export function SiteHeader() {
           <ThemeToggle />
           {session ? (
             <div className="hidden items-center gap-2 md:flex">
-              <span
-                className="inline-flex size-9 items-center justify-center rounded-full border border-primary/40 font-mono text-xs uppercase text-primary"
-                title={session.email}
+              {/* The avatar is the way to the profile. It was already showing the
+                  account initial and doing nothing when clicked, which is the one
+                  place a signed-in student looks for their own details. */}
+              <Link
+                to="/profile"
+                title={t("nav.profile")}
+                aria-label={t("nav.profile")}
+                className="focus-ring inline-flex size-9 items-center justify-center rounded-full border border-primary/40 font-mono text-xs uppercase text-primary transition-colors hover:bg-primary/10"
               >
                 {session.email.slice(0, 1)}
-              </span>
+              </Link>
               <button
                 onClick={() => { logout(); nav("/"); }}
                 className="focus-ring inline-flex h-9 items-center gap-1.5 rounded-[3px] border border-border px-3 text-sm text-muted-foreground transition-colors hover:text-foreground"

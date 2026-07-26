@@ -133,6 +133,7 @@ export type SeoRoutePath =
   | "/funding"
   | "/interview"
   | "/moderator"
+  | "/profile"
   | "*";
 
 export interface SeoRouteMeta {
@@ -252,6 +253,19 @@ export const SEO_ROUTES: Record<SeoRoutePath, SeoRouteMeta> = {
       bn: "আপনার ভিসা ও ভর্তি দলিল নিরাপদে সংরক্ষণ ও সংগঠিত করুন — সাইন-ইন প্রয়োজন।",
       en: "Store and organise your visa and admission documents securely — sign-in required.",
     },
+    noindex: true,
+  },
+  "/profile": {
+    path: "/profile",
+    title: {
+      bn: "আপনার প্রোফাইল — দিগন্ত",
+      en: "Your profile — Digonto",
+    },
+    description: {
+      bn: "আপনার পড়াশোনা, পরীক্ষার স্কোর ও বাজেটের তথ্য দিন, যাতে উত্তরগুলো আপনার উপযোগী হয় — সাইন-ইন প্রয়োজন।",
+      en: "Tell Digonto about your studies, test scores and budget so answers are specific to you — sign-in required.",
+    },
+    // A signed-in page holding a student's own details, so it must never be indexed.
     noindex: true,
   },
   "/funding": {

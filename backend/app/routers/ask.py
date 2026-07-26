@@ -35,6 +35,8 @@ from app.models.ask import AskRequest, ConversationCreate, ConversationOut, Feed
 from app.models.common import Page
 from app.repositories.answer_repo import AnswerRepo
 from app.repositories.conversation_repo import ConversationRepo
+from app.repositories.profile_repo import ProfileRepo
+from app.repositories.target_repo import TargetRepo
 from app.repositories.snapshot_repo import SnapshotRepo
 from app.routers._sse import SSE_HEADERS, format_sse
 from app.services.ask_service import AskService
@@ -57,6 +59,9 @@ def get_ask_service(
         router_,
         retriever,
         cache,
+        # ProfileRepo needs events.db too: it writes a profile-changed event.
+        ProfileRepo(dbs.app, dbs.events),
+        TargetRepo(dbs.app),
     )
 
 

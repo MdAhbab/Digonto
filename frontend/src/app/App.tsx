@@ -30,6 +30,7 @@ const Ledger = lazy(() => import("./pages/Ledger").then(m => ({ default: m.Ledge
 const Security = lazy(() => import("./pages/Security").then(m => ({ default: m.Security })));
 const About = lazy(() => import("./pages/About").then(m => ({ default: m.About })));
 const Auth = lazy(() => import("./pages/Auth").then(m => ({ default: m.Auth })));
+const Profile = lazy(() => import("./pages/Profile"));
 const Moderator = lazy(() => import("./pages/Moderator").then(m => ({ default: m.Moderator })));
 const NotFound = lazy(() => import("./pages/NotFound").then(m => ({ default: m.NotFound })));
 
@@ -52,6 +53,7 @@ export default function App() {
                 <Route path="/funding" element={<RequireAuth><Suspense fallback={<RouteFallback />}><Funding /></Suspense></RequireAuth>} />
                 <Route path="/interview" element={<RequireAuth><Suspense fallback={<RouteFallback />}><Interview /></Suspense></RequireAuth>} />
                 {/* Moderator console — session + role gated */}
+                <Route path="/profile" element={<RequireAuth><Suspense fallback={<RouteFallback />}><Profile /></Suspense></RequireAuth>} />
                 <Route path="/moderator" element={<RequireRole role="moderator"><Suspense fallback={<RouteFallback />}><Moderator /></Suspense></RequireRole>} />
                 {/* Public pages */}
                 <Route path="/destinations" element={<Suspense fallback={<RouteFallback />}><Destinations /></Suspense>} />
