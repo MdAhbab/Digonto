@@ -53,11 +53,11 @@ The honest cost: human review does not scale linearly with users, and a reviewer
 ## 6. Security assurances
 
 - Self-hosted inference: passports, bank statements, and transcripts never leave the deployment VM; no third-party model API receives vault content.
-- Vault files encrypted at rest (AES-256-GCM, per-user data keys under a wrapped master key); TLS 1.3 in transit; signed, expiring upload URLs.
+- Vault files encrypted at rest (AES-256-GCM, per-file data keys under a wrapped master key); TLS 1.2/1.3 in transit; signed, expiring download URLs.
 - Data minimisation: the learning buffer stores no document contents; text entering it passes automated PII removal and a consent gate.
-- User control: full export and hard delete, with deletion cascading to file storage and buffer rows.
+- User control: hard delete, with deletion cascading to file storage and buffer rows. Full data export is specified but not yet built: the endpoint records the request and returns immediately rather than assembling and sending the archive (`docs/api_contract.md` section 16).
 - Prompt-injection defence: crawled portal text is treated as untrusted, wrapped in a data-only frame, with tool calling disabled during grounded answering.
-- Agent containment: per-agent tool allow-lists enforced by the runtime; no deletion tools exist for agents; every tool call is audit-logged.
+- Agent containment: no agent has a deletion tool. A per-agent tool allow-list and a per-tool-call audit log are specified in the event schema (`agent_runs`, `agent_tool_calls`) for an audited, multi-step tool-calling runtime that is not built yet; each agent today makes one schema-constrained model call instead (`docs/api_contract.md` section 16).
 - Operational: nightly off-VM backups, model rollback tags, dead-letter queues with alerts, and rate limiting per user and IP.
 
 ## 7. Risks and mitigations

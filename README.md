@@ -165,10 +165,15 @@ Verified against the running install with `ollama show gemma4:e2b`:
 | Capabilities | completion, **vision**, **audio**, **tools**, thinking |
 | Licence | Apache 2.0 |
 
-Native **tool calling** is what makes seven real function-calling agents possible
-instead of a fragile parser over free text. Native **vision** reads uploaded
-transcripts, bank statements, and refusal letters. Native **audio** takes Bangla
-voice input. One model, one runtime, no second service.
+Native **vision** reads uploaded transcripts, bank statements, and refusal
+letters, directly, with no separate OCR service. Native **tool calling** is
+verified against the live model and backs three reusable MCP servers; the
+seven agents themselves ask the model for one schema-constrained structured
+reply each instead of calling a tool, so there is no hand-written parser over
+free text either way. Native **audio** is a model capability this deployment
+has not wired up yet: voice input is planned, and today the interview room
+accepts typed answers only, because no speech-to-text service is deployed.
+One model, one runtime, for everything that is built.
 
 It fits in the memory of a modest virtual machine, which decides two things that
 matter more than benchmark scores: student passports never leave our own server,
