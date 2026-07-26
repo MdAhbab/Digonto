@@ -23,10 +23,30 @@ passage supports an answer. Link the live app, the repository, and the video.
 
 ### 2. Environment and model load
 
-Load Gemma 4 E2B from the public model source with a quantised configuration
-sized to the Kaggle accelerator. Print the resolved model identifier, the
-parameter count, and the context length, so a judge can see exactly what ran.
-Pin every library version in the first cell.
+**Decision: attach Gemma 4 E2B as a Kaggle Model and load it with `transformers`.
+Do not install Ollama in the notebook.**
+
+Google mirrors every Gemma 4 variant on Kaggle Models, so the model is attached to
+the notebook as a data source rather than downloaded at runtime. Confirm the exact
+variation slug in the Kaggle Models UI before writing the cell, then load through
+`kagglehub.model_download` on the `google/gemma-4` model with the E2B transformers
+variation.
+
+The reason for this choice is reproducibility under judging conditions. An
+attached Kaggle Model works with **internet access disabled**, which is the
+setting a forked notebook may run under. Installing Ollama requires internet
+enabled, adds a multi-minute install to every run, and gains nothing here: the
+tunnel setups documented in the community are for exposing a Kaggle GPU as a
+remote server, which is the opposite of what this notebook needs.
+
+Print the resolved model path, the parameter count, the context length, and the
+quantisation actually loaded, so a judge can see exactly what ran. Pin every
+library version in the first cell and set the accelerator explicitly.
+
+**State the divergence honestly in this cell.** Production serves Q4_K_M through
+Ollama on CPU. The notebook loads a transformers checkpoint on a Kaggle
+accelerator. Same weights, different quantisation and different hardware, so
+notebook latency is not production latency and must never be quoted as such.
 
 ### 3. The corpus (documented and licensed)
 
