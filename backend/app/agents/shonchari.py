@@ -91,15 +91,37 @@ _NUMBER = re.compile(r"\b\d[\d,]{2,}\b")
 def _detect_contradictions(
     answer_text: str, document_field_hashes: dict[str, str]
 ) -> list[dict[str, Any]]:
+    """Flag spoken figures that disagree with amount / id-number field digests.
+
+    Only amount/`_no`/`_number` hashes are considered. When none exist, spoken
+    numbers are left alone — flagging every digit in an answer as unverified
+    when the vault has no comparable fields is noise, not a contradiction.
+    """
     found: list[dict[str, Any]] = []
+    relevant = {
+        key: digest
+        for key, digest in (document_field_hashes or {}).items()
+        if key.endswith(("_amount", "_no", "_number"))
+    }
+    if not relevant:
+        return found
+
+    known = set(relevant.values())
     for token in set(_NUMBER.findall(answer_text or "")):
         digest = _hash(token.replace(",", ""))
-        for field_key, doc_digest in (document_field_hashes or {}).items():
-            if field_key.endswith(("_amount", "_no", "_number")) and doc_digest != digest:
-                continue
-        # A spoken figure that matches no recorded field is worth flagging as
-        # unverified rather than as wrong.
-        if digest not in set((document_field_hashes or {}).values()):
+        if digest in known:
+            continue
+        # Spoken figure matches none of the recorded amount/number digests.
+        if len(relevant) == 1:
+            field_key = next(iter(relevant))
+            found.append(
+                {
+                    "field": field_key,
+                    "said": token,
+                    "status": "mismatch",
+                }
+            )
+        else:
             found.append(
                 {
                     "field": "spoken_figure",

@@ -732,7 +732,11 @@ class VaultService:
 
     def _decrypt_path(self, path: Path, doc: dict[str, Any]) -> bytes:
         return decrypt_file(
-            path.read_bytes(), doc["wrapped_dek"], doc["nonce"], settings=self._settings
+            path.read_bytes(),
+            doc["wrapped_dek"],
+            doc["nonce"],
+            user_id=doc["user_id"],
+            settings=self._settings,
         )
 
     async def delete_document(self, user_id: int, public_id: str) -> None:

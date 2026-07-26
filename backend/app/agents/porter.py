@@ -181,6 +181,8 @@ async def compose_alert(
             ),
             schema=ALERT_SCHEMA,
             max_tokens=1024,
+            # Student profile text is PII; never route this call remotely.
+            contains_user_documents=bool(student_context),
         ),
     )
 

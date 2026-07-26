@@ -45,7 +45,10 @@ def destination_from_row(row: Mapping[str, Any]) -> DestinationOut:
     """
     visa_types = row.get("visa_types")
     if isinstance(visa_types, str):
-        visa_types = json.loads(visa_types)
+        try:
+            visa_types = json.loads(visa_types)
+        except ValueError:
+            visa_types = None
 
     return DestinationOut(
         id=row["code"],

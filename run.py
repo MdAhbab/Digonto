@@ -45,11 +45,9 @@ ENV_FILE = ROOT / ".env"
 VENV = ROOT / ".venv"
 FONT_DIR = FRONTEND / "public" / "fonts"
 
-MIN_PYTHON = (3, 12)
-# First version the pinned dependency set cannot install on. pydantic-core ships
-# no wheel for it, and building from source fails because its bundled PyO3
-# supports up to 3.13. Raise this once the pins are updated and verified.
-NEXT_UNSUPPORTED_PYTHON = (3, 14)
+MIN_PYTHON = (3, 10)
+# First version the pinned dependency set cannot install on.
+NEXT_UNSUPPORTED_PYTHON = (3, 16)
 MIN_NODE = 20
 
 IS_WINDOWS = platform.system() == "Windows"
@@ -525,6 +523,11 @@ def main() -> None:
                 "--port", env.get("BACKEND_PORT", "8000"),
                 "--reload",
             ],
+            cwd=BACKEND,
+        )
+        r.spawn(
+            "worker",
+            [str(py), "-m", "app.workers.main"],
             cwd=BACKEND,
         )
     if not args.backend_only:

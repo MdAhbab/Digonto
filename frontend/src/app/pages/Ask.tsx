@@ -69,8 +69,20 @@ export function Ask() {
   const [active, setActive] = useState<{ id: string; loading: boolean; data: SnapshotDetail | null; error: ApiError | null } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const conversationIdRef = useRef<string | null>(null);
+  const streamAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    return () => {
+      streamAbortRef.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    conversationIdRef.current = null;
+    setItems([]);
+    setHistoryLoading(true);
+    setHistoryError(null);
+
     let cancelled = false;
     (async () => {
       try {
@@ -130,6 +142,10 @@ export function Ask() {
 
     const conversationId = await ensureConversation();
 
+    streamAbortRef.current?.abort();
+    const ac = new AbortController();
+    streamAbortRef.current = ac;
+
     try {
       await sse(
         "/ask",
@@ -182,11 +198,14 @@ export function Ask() {
             }));
           },
         },
+        { signal: ac.signal },
       );
     } catch (err) {
+      if (ac.signal.aborted) return;
       patch((ex) => ({ ...ex, streaming: false, error: err instanceof ApiError ? err : null }));
     } finally {
       setSending(false);
+      patch((ex) => (ex.streaming ? { ...ex, streaming: false } : ex));
     }
   }
 
@@ -236,7 +255,10 @@ export function Ask() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) submit(e as unknown as React.FormEvent);
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                submit(e as unknown as React.FormEvent);
+              }
             }}
             rows={1}
             placeholder={t("ask.placeholder")}

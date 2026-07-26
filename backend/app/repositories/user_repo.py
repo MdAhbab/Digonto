@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.db.connection import Database
@@ -82,9 +83,31 @@ class UserRepo:
             "UPDATE users SET last_seen_at = ? WHERE id = ?", (utc_now_iso(), user_id)
         )
 
-    async def record_failed_login(self, user_id: int) -> None:
+    async def record_failed_login(
+        self, user_id: int, *, lock_after: int, lock_minutes: int
+    ) -> None:
+        """Increment the failure counter; set `locked_until` once the threshold is hit.
+
+        The threshold and duration are passed by the service so the lockout
+        policy lives in one place (`AuthService`) rather than being hard-coded
+        into the repository.
+        """
+        # `failed_logins + 1 >= lock_after` after the increment. When the
+        # threshold is crossed, stamp locked_until; otherwise leave any prior
+        # lock alone (it will still be enforced by the service until it expires
+        # or a successful login clears it).
+        locked_until = (
+            datetime.now(timezone.utc) + timedelta(minutes=lock_minutes)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
         await self._db.execute(
-            "UPDATE users SET failed_logins = failed_logins + 1 WHERE id = ?", (user_id,)
+            """UPDATE users
+                  SET failed_logins = failed_logins + 1,
+                      locked_until = CASE
+                          WHEN failed_logins + 1 >= ? THEN ?
+                          ELSE locked_until
+                      END
+                WHERE id = ?""",
+            (lock_after, locked_until, user_id),
         )
 
     async def reset_failed_logins(self, user_id: int) -> None:
@@ -163,11 +186,40 @@ class UserRepo:
         )
         return dict(row) if row else None
 
-    async def mark_replaced(self, old_id: int, new_id: int) -> None:
+    async def claim_refresh_for_rotation(self, token_id: int) -> bool:
+        """Atomically revoke a live refresh token so only one rotator wins.
+
+        Returns True when this caller claimed the row (`revoked_at` was NULL).
+        Returns False when another request already rotated it — the service
+        must treat that as reuse and burn the family.
+        """
+        n = await self._db.execute_count(
+            """UPDATE refresh_tokens
+                  SET revoked_at = ?
+                WHERE id = ? AND revoked_at IS NULL""",
+            (utc_now_iso(), token_id),
+        )
+        return n > 0
+
+    async def set_replaced_by(self, old_id: int, new_id: int) -> None:
         await self._db.execute(
-            "UPDATE refresh_tokens SET revoked_at = ?, replaced_by_id = ? WHERE id = ?",
+            "UPDATE refresh_tokens SET replaced_by_id = ? WHERE id = ?",
+            (new_id, old_id),
+        )
+
+    async def mark_replaced(self, old_id: int, new_id: int) -> bool:
+        """Conditional rotation revoke. Prefer `claim_refresh_for_rotation` +
+        `set_replaced_by` when the replacement must be issued only after claim.
+
+        Returns True if the old token was still live and is now revoked.
+        """
+        n = await self._db.execute_count(
+            """UPDATE refresh_tokens
+                  SET revoked_at = ?, replaced_by_id = ?
+                WHERE id = ? AND revoked_at IS NULL""",
             (utc_now_iso(), new_id, old_id),
         )
+        return n > 0
 
     async def revoke_family(self, family_id: str) -> None:
         await self._db.execute(

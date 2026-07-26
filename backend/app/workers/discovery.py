@@ -114,10 +114,14 @@ def is_official(url: str) -> bool:
     if any(domain == b or domain.endswith(f".{b}") for b in BLOCKED_HOSTS):
         return False
 
-    return any(
-        host == suffix.lstrip(".") or host.endswith(suffix)
-        for suffix in OFFICIAL_SUFFIXES
-    )
+    def _matches_suffix(host_name: str, suffix: str) -> bool:
+        bare = suffix.lstrip(".")
+        if host_name == bare:
+            return True
+        dotted = suffix if suffix.startswith(".") else f".{suffix}"
+        return host_name.endswith(dotted)
+
+    return any(_matches_suffix(host, suffix) for suffix in OFFICIAL_SUFFIXES)
 
 
 class _SearchThrottle:

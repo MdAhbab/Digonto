@@ -27,6 +27,7 @@ import re
 from collections.abc import AsyncIterator
 from typing import Any
 
+from app.agents.runtime import validate_against_schema
 from app.config import get_settings
 from app.llm.router import LLMRequest, ModelRouter, TaskKind
 from app.rag.cache import SemanticCache
@@ -168,6 +169,55 @@ def _chunks(text: str, size: int = 12) -> list[str]:
             current = ""
     if current:
         out.append(current)
+    return out
+
+
+def _coerce_grounded_answer(data: dict[str, Any]) -> dict[str, Any]:
+    """Coerce common type slips so schema validation is not brittle.
+
+    Providers sometimes return numbers/booleans as strings (or the reverse)
+    even under a JSON schema. Coercing the fields we can before validation
+    keeps a usable answer; anything still wrong fails validation and takes
+    the incomplete/refusal path instead of crashing the SSE stream.
+    """
+    out = dict(data)
+    for key in ("answer_bn", "answer_en", "refusal_reason"):
+        if key in out and out[key] is not None and not isinstance(out[key], str):
+            out[key] = str(out[key])
+    if "is_refusal" in out and not isinstance(out["is_refusal"], bool):
+        val = out["is_refusal"]
+        if val in (0, 1):
+            out["is_refusal"] = bool(val)
+        elif isinstance(val, str):
+            out["is_refusal"] = val.strip().lower() in ("true", "1", "yes")
+    if "confidence" in out and out["confidence"] is not None and not isinstance(
+        out["confidence"], bool
+    ):
+        try:
+            out["confidence"] = float(out["confidence"])
+        except (TypeError, ValueError):
+            pass
+    if out.get("citations") is None:
+        out["citations"] = []
+    if isinstance(out.get("citations"), list):
+        coerced: list[dict[str, Any]] = []
+        for c in out["citations"]:
+            if not isinstance(c, dict):
+                continue
+            item = dict(c)
+            if "ordinal" in item and not isinstance(item["ordinal"], int):
+                try:
+                    item["ordinal"] = int(item["ordinal"])
+                except (TypeError, ValueError):
+                    pass
+            if "snapshot_id" in item and not isinstance(item["snapshot_id"], str):
+                item["snapshot_id"] = str(item["snapshot_id"])
+            if "quoted_span" in item and not isinstance(item["quoted_span"], str):
+                item["quoted_span"] = (
+                    "" if item["quoted_span"] is None else str(item["quoted_span"])
+                )
+            coerced.append(item)
+        out["citations"] = coerced
     return out
 
 
@@ -321,7 +371,10 @@ async def stream_grounded_answer(
         user_prompt = f"SOURCE PASSAGES:\n{_frame_sources(passages)}\n\n"
         if student_context:
             user_prompt += f"ABOUT THE STUDENT ASKING:\n{student_context}\n\n"
-        user_prompt += f"QUESTION: {question}"
+        # The question is student-typed and untrusted the same way crawled text
+        # is: leave it outside the system prompt and fence it so an injected
+        # "ignore the sources" line cannot sit as raw instruction.
+        user_prompt += frame_untrusted(question, label="QUESTION")
 
         request = LLMRequest(
             kind=TaskKind.GROUNDED_ANSWER,
@@ -363,14 +416,23 @@ async def stream_grounded_answer(
                     yield {"kind": "token", "text": chunk}
                 emitted = len(decoded)
 
-        # 4. Parse the finished object. Citations are emitted only from a valid
-        #    parse, so a truncated stream never produces a citation to nothing.
+        # 4. Parse and schema-validate the finished object. Citations are
+        #    emitted only from a valid parse, so a truncated or mistyped stream
+        #    never produces a citation to nothing — and never TypeErrors the
+        #    SSE consumer by handing `_chunks` a non-string answer field.
         try:
             data = json.loads(buffer)
+            if not isinstance(data, dict):
+                raise ValueError("root JSON must be an object")
+            data = _coerce_grounded_answer(data)
+            violations = validate_against_schema(data, ANSWER_SCHEMA)
+            if violations:
+                raise ValueError(f"schema violations: {violations[:3]}")
         except ValueError:
             # The object never closed, almost always because the generation hit
-            # the token ceiling mid-JSON. Two different situations hide here and
-            # they need opposite handling.
+            # the token ceiling mid-JSON — or the types failed validation after
+            # coercion. Two different situations hide here and they need
+            # opposite handling.
             #
             # If nothing was emitted, there is no answer and refusing is right.
             #
@@ -430,6 +492,12 @@ async def stream_grounded_answer(
 
         answer_primary = data.get(primary_field, "") or ""
         answer_alt = data.get("answer_en" if primary == "bn" else "answer_bn", "") or ""
+        # Schema validation guarantees strings; keep the defensive cast so a
+        # future schema relaxation cannot reintroduce the TypeError path.
+        if not isinstance(answer_primary, str):
+            answer_primary = str(answer_primary)
+        if not isinstance(answer_alt, str):
+            answer_alt = str(answer_alt)
 
         # Emit anything the incremental decoder missed, so what the student read
         # always equals what gets stored.
@@ -438,25 +506,29 @@ async def stream_grounded_answer(
                 yield {"kind": "token", "text": chunk}
 
         citation_payloads: list[dict[str, Any]] = []
-        for c in data.get("citations", []):
-            src = by_public_id.get(str(c.get("snapshot_id", "")))
-            if src is None:
-                # A citation naming a snapshot that was never retrieved is the
-                # one output that would break the Truth Ledger guarantee, so it
-                # is dropped rather than shown.
-                log.warning("dropped citation to unretrieved snapshot %s", c.get("snapshot_id"))
-                continue
-            payload = {
-                "ordinal": int(c.get("ordinal", len(citation_payloads) + 1)),
-                "snapshot_id": src.snapshot_id,
-                "passage_id": src.passage_id,
-                "quoted": str(c.get("quoted_span", ""))[:QUOTED_SPAN_MAX_CHARS],
-                "snapshot_public_id": src.snapshot_public_id,
-                "portal": src.portal,
-                "captured": src.captured,
-            }
-            citation_payloads.append(payload)
-            yield {"kind": "citation", **payload}
+        raw_citations = data.get("citations")
+        if isinstance(raw_citations, list):
+            for c in raw_citations:
+                if not isinstance(c, dict):
+                    continue
+                src = by_public_id.get(str(c.get("snapshot_id", "")))
+                if src is None:
+                    # A citation naming a snapshot that was never retrieved is the
+                    # one output that would break the Truth Ledger guarantee, so it
+                    # is dropped rather than shown.
+                    log.warning("dropped citation to unretrieved snapshot %s", c.get("snapshot_id"))
+                    continue
+                payload = {
+                    "ordinal": int(c.get("ordinal", len(citation_payloads) + 1)),
+                    "snapshot_id": src.snapshot_id,
+                    "passage_id": src.passage_id,
+                    "quoted": str(c.get("quoted_span", ""))[:QUOTED_SPAN_MAX_CHARS],
+                    "snapshot_public_id": src.snapshot_public_id,
+                    "portal": src.portal,
+                    "captured": src.captured,
+                }
+                citation_payloads.append(payload)
+                yield {"kind": "citation", **payload}
 
         yield {"kind": "alt", "lang": alt_lang, "text": answer_alt}
         yield {

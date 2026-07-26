@@ -234,7 +234,15 @@ class PlannerService:
             subject_id=step_public_id,
             payload={"status": status},
         )
-        return await self.get_timeline(user_id, None)
+        # Return the timeline for *this* plan's target — not the user's most
+        # recently updated plan (`get_timeline(user_id, None)`), which can be
+        # a different target when the student has more than one.
+        target_public_id = None
+        if plan.get("target_id") is not None:
+            target = await self._targets.get_target_by_id(user_id, plan["target_id"])
+            if target is not None:
+                target_public_id = target["public_id"]
+        return await self.get_timeline(user_id, target_public_id)
 
     async def complete_step(self, user_id: int, step_public_id: str) -> dict:
         return await self._set_step_status(user_id, step_public_id, "done")

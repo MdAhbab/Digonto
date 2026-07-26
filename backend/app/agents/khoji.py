@@ -13,6 +13,7 @@ per-criterion statements the student can check and argue with.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -64,29 +65,87 @@ SYSTEM = (
 )
 
 
+def _criterion_met(operator: str, value: str, actual: Any) -> bool | None:
+    """Evaluate one `scholarship_criteria` row against a known value.
+
+    Returns True/False, or None when the criterion cannot be judged (missing
+    profile field or unparseable stored value). None is "unverified": hard
+    criteria only disqualify on an explicit False.
+    """
+    if actual is None:
+        return None
+    try:
+        if operator == "gte":
+            return float(actual) >= float(value)
+        if operator == "lte":
+            return float(actual) <= float(value)
+        if operator == "eq":
+            return str(actual).strip().casefold() == str(value).strip().casefold()
+        if operator == "in":
+            options: set[str]
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, list):
+                    options = {str(v).strip().casefold() for v in parsed}
+                else:
+                    options = {v.strip().casefold() for v in str(value).split(",")}
+            except (json.JSONDecodeError, TypeError):
+                options = {v.strip().casefold() for v in str(value).split(",")}
+            return str(actual).strip().casefold() in options
+        if operator == "exists":
+            return bool(actual)
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _profile_value(profile: dict[str, Any], criterion_key: str) -> Any:
+    """Resolve a criterion key against the profile.
+
+    `cgpa_min` normalises to a 4.0 scale (Bangladeshi institutions use both
+    4.0 and 5.0). A zero or unusable scale returns None rather than dividing
+    by zero — the hard check then treats the criterion as unverified.
+    """
+    if criterion_key == "cgpa_min":
+        cgpa = profile.get("cgpa")
+        if cgpa is None:
+            return None
+        scale = profile.get("cgpa_scale") or 4.0
+        try:
+            scale_f = float(scale)
+        except (TypeError, ValueError):
+            return None
+        if scale_f == 0:
+            return None
+        return float(cgpa) * (4.0 / scale_f)
+    return profile.get(criterion_key)
+
+
+def _criterion_threshold(award: dict[str, Any], key: str) -> Any:
+    for c in award.get("criteria") or []:
+        if c.get("criterion_key") == key:
+            return c.get("value")
+    return None
+
+
 def _fails_hard_criteria(profile: dict[str, Any], award: dict[str, Any]) -> str | None:
-    """Return the failing criterion key, or None when the student qualifies."""
-    cgpa = profile.get("cgpa")
-    scale = profile.get("cgpa_scale") or 4.0
-    if award.get("min_cgpa") and cgpa is not None:
-        # Normalise to a 4.0 scale before comparing, since Bangladeshi
-        # institutions use both 4.0 and 5.0.
-        normalised = float(cgpa) * (4.0 / float(scale))
-        if normalised < float(award["min_cgpa"]):
-            return "cgpa_min"
+    """Return the failing hard criterion key, or None when the student qualifies.
 
-    levels = award.get("degree_levels")
-    if levels and profile.get("degree_level") and profile["degree_level"] not in levels:
-        return "degree_level"
-
-    if award.get("nationality_excluded") and "BD" in (award["nationality_excluded"] or []):
-        return "nationality"
-
-    english = profile.get("english_overall")
-    if award.get("min_english") and english is not None:
-        if float(english) < float(award["min_english"]):
-            return "english_min"
-
+    Real award rows carry a `criteria` list from `scholarship_criteria` (see
+    funding_service.rematch). Root fields like `min_cgpa` are not populated on
+    that shape, so evaluating them was a no-op.
+    """
+    criteria = award.get("criteria") or []
+    for c in criteria:
+        if not c.get("is_hard"):
+            continue
+        met = _criterion_met(
+            str(c.get("operator") or ""),
+            str(c.get("value") if c.get("value") is not None else ""),
+            _profile_value(profile, str(c.get("criterion_key") or "")),
+        )
+        if met is False:
+            return str(c.get("criterion_key") or "hard_criteria")
     return None
 
 
@@ -157,6 +216,8 @@ async def score_eligibility(
                     + frame_untrusted(award_lines, label="AWARDS")
                 ),
                 schema=SCORE_SCHEMA,
+                # Profile text is student PII; keep the call on the local path.
+                contains_user_documents=True,
             ),
         )
     except Exception as exc:  # noqa: BLE001
@@ -200,25 +261,33 @@ async def score_eligibility(
 
 
 def _hard_reason_en(key: str, profile: dict[str, Any], award: dict[str, Any]) -> str:
+    threshold = _criterion_threshold(award, key)
     return {
-        "cgpa_min": f"This award requires a minimum CGPA of {award.get('min_cgpa')} "
+        "cgpa_min": f"This award requires a minimum CGPA of {threshold} "
                     f"on a 4.0 scale. Your recorded CGPA is {profile.get('cgpa')} "
                     f"on a {profile.get('cgpa_scale')} scale.",
-        "degree_level": f"This award is for {award.get('degree_levels')} applicants. "
+        "degree_level": f"This award is for {threshold} applicants. "
                         f"Your profile records {profile.get('degree_level')}.",
-        "nationality": "This award is not open to Bangladeshi nationals.",
+        "nationality": "This award is not open to applicants with your nationality "
+                       "as recorded (or the nationality requirement could not be met).",
+        "english_overall": f"This award requires an English score of at least "
+                           f"{threshold}. Your recorded score is "
+                           f"{profile.get('english_overall')}.",
         "english_min": f"This award requires an English score of at least "
-                       f"{award.get('min_english')}. Your recorded score is "
+                       f"{threshold}. Your recorded score is "
                        f"{profile.get('english_overall')}.",
-    }.get(key, "You do not meet a stated eligibility rule for this award.")
+    }.get(key, f"You do not meet the stated eligibility rule '{key}' for this award.")
 
 
 def _hard_reason_bn(key: str, profile: dict[str, Any], award: dict[str, Any]) -> str:
+    threshold = _criterion_threshold(award, key)
     return {
-        "cgpa_min": f"এই বৃত্তির জন্য ৪.০ স্কেলে ন্যূনতম {award.get('min_cgpa')} সিজিপিএ দরকার। "
+        "cgpa_min": f"এই বৃত্তির জন্য ৪.০ স্কেলে ন্যূনতম {threshold} সিজিপিএ দরকার। "
                     f"আপনার সিজিপিএ {profile.get('cgpa')} ({profile.get('cgpa_scale')} স্কেলে)।",
         "degree_level": "আপনার বর্তমান ডিগ্রি স্তর এই বৃত্তির জন্য প্রযোজ্য নয়।",
-        "nationality": "এই বৃত্তি বাংলাদেশি নাগরিকদের জন্য উন্মুক্ত নয়।",
-        "english_min": f"এই বৃত্তির জন্য ইংরেজিতে অন্তত {award.get('min_english')} স্কোর দরকার। "
+        "nationality": "এই বৃত্তি আপনার জাতীয়তার জন্য উন্মুক্ত নয়।",
+        "english_overall": f"এই বৃত্তির জন্য ইংরেজিতে অন্তত {threshold} স্কোর দরকার। "
+                           f"আপনার স্কোর {profile.get('english_overall')}।",
+        "english_min": f"এই বৃত্তির জন্য ইংরেজিতে অন্তত {threshold} স্কোর দরকার। "
                        f"আপনার স্কোর {profile.get('english_overall')}।",
     }.get(key, "আপনি এই বৃত্তির একটি ঘোষিত শর্ত পূরণ করছেন না।")

@@ -6,9 +6,10 @@ from typing import Mapping
 
 from fastapi import APIRouter, Depends, Query, status
 
+from app.config import Settings, get_settings
 from app.db.connection import Databases
 from app.deps import RateLimit, get_bus, get_current_user, get_dbs, get_router
-from app.errors import NotFound
+from app.errors import ValidationProblem
 from app.events.bus import EventBus
 from app.llm.router import ModelRouter
 from app.models.common import Page
@@ -24,6 +25,7 @@ from app.models.funding import (
     SortOrder,
 )
 from app.repositories.budget_repo import BudgetRepo
+from app.repositories.document_repo import DocumentRepo
 from app.repositories.profile_repo import ProfileRepo
 from app.repositories.scholarship_repo import ScholarshipRepo
 from app.repositories.target_repo import TargetRepo
@@ -40,10 +42,12 @@ def get_funding_service(
     dbs: Databases = Depends(get_dbs),
     bus: EventBus = Depends(get_bus),
     model_router: ModelRouter = Depends(get_router),
+    settings: Settings = Depends(get_settings),
 ) -> FundingService:
     return FundingService(
         ScholarshipRepo(dbs.app), BudgetRepo(dbs.app), ProfileRepo(dbs.app, dbs.events),
         TargetRepo(dbs.app), bus, model_router,
+        documents=DocumentRepo(dbs.app), settings=settings,
     )
 
 
@@ -138,7 +142,7 @@ async def fee_check(
     funding: FundingService = Depends(get_funding_service),
 ) -> FeeCheckOut:
     if body.quoted_bdt is None and body.document_id is None:
-        raise NotFound(
+        raise ValidationProblem(
             detail_en="Provide a quoted amount, or upload the invoice as a document first.",
             detail_bn="একটি কোটেড পরিমাণ দিন, অথবা প্রথমে চালানটি নথি হিসেবে আপলোড করুন।",
         )

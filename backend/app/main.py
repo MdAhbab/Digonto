@@ -8,6 +8,7 @@ request path builds its own connection pool.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -26,6 +27,7 @@ from ulid import ULID
 from app.config import get_settings
 from app.db.connection import Databases
 from app.db.migrate import run_migrations
+from app.workers.recovery import documents_to_rescan, recover_interrupted_work
 from app.db.seed_demo import seed_demo
 from app.errors import Forbidden, install_exception_handlers
 from app.events.bus import EventBus
@@ -33,6 +35,11 @@ from app.llm.router import ModelRouter
 from app.rag.cache import SemanticCache
 from app.rag.embeddings import Embedder
 from app.rag.retrieval import Retriever
+from app.repositories.audit_repo import AuditRepo
+from app.repositories.document_repo import DocumentRepo
+from app.repositories.profile_repo import ProfileRepo
+from app.repositories.target_repo import TargetRepo
+from app.services.vault_service import VaultService
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -45,6 +52,15 @@ REQUEST_LATENCY = Histogram(
 )
 
 
+async def _extract_rescan(vault: VaultService, user_id: int, public_id: str) -> None:
+    """Same guard as the upload BackgroundTasks path: extract records its own
+    document failures; an unforeseen crash must not take down the task runner."""
+    try:
+        await vault.extract_document(user_id, public_id)
+    except Exception:  # noqa: BLE001 - a background task must not raise into the server
+        log.exception("startup rescan failed document=%s", public_id)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
@@ -53,6 +69,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     dbs = Databases(settings.app_db, settings.events_db, settings.learn_db)
     await dbs.connect_all()
     await run_migrations(dbs)
+
+    # Startup is the moment an interruption has just happened, so this runs before the app
+    # serves anything. Work that was in progress when the previous process stopped is still
+    # marked in progress, and until it is cleared a document reads as "being scanned now"
+    # forever and an abandoned interview blocks its owner from starting another one.
+    # See app/workers/recovery.py for the six markers and why each window is what it is.
+    #
+    # The list of documents worth reading again is taken first, because the sweep is about to
+    # mark them failed and the query that finds them looks for `scanning`. They are requeued
+    # further down, once the model router and the repositories they need exist.
+    rescan = await documents_to_rescan(dbs)
+    await recover_interrupted_work(dbs, settings)
 
     # decode_responses=True: app/events/bus.py and app/deps.py both assume
     # str fields, not bytes, out of this client.
@@ -97,6 +125,35 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.retriever = retriever
     app.state.semantic_cache = semantic_cache
     app.state.started_at = time.monotonic()
+
+    # Requeue scans interrupted by the previous process. Recovery already marked
+    # these rows `failed`; flip them back to `scanning` and run the same
+    # extract_document path upload uses (asyncio.create_task stands in for
+    # BackgroundTasks, which only exists on a request).
+    if rescan:
+        documents = DocumentRepo(dbs.app)
+        vault = VaultService(
+            documents,
+            AuditRepo(dbs.app),
+            ProfileRepo(dbs.app, dbs.events),
+            TargetRepo(dbs.app),
+            bus,
+            model_router,
+            settings,
+        )
+        queued = 0
+        for user_id, public_id in rescan:
+            row = await documents.get_by_public_id(user_id, public_id)
+            if row is None:
+                continue
+            await documents.set_status(row["id"], "scanning")
+            asyncio.create_task(
+                _extract_rescan(vault, user_id, public_id),
+                name=f"vault-rescan-{public_id}",
+            )
+            queued += 1
+        if queued:
+            log.info("requeued %d interrupted document scan(s)", queued)
 
     await seed_demo(dbs, settings)
 

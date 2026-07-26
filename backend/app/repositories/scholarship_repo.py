@@ -16,6 +16,14 @@ _SORT_COLUMNS = {
     "deadline": "sc.deadline_at",
 }
 
+# Row keys used when encoding/decoding the keyset cursor for each sort.
+_SORT_ROW_KEYS = {
+    "name": "name",
+    "country": "country_code",
+    "coverage": "amount",
+    "deadline": "deadline_at",
+}
+
 
 class ScholarshipRepo:
     def __init__(self, db: Database) -> None:
@@ -63,6 +71,7 @@ class ScholarshipRepo:
         limit: int = 20,
     ) -> tuple[list[dict[str, Any]], str | None]:
         sort_col = _SORT_COLUMNS.get(sort, "fm.rank")
+        sort_row_key = _SORT_ROW_KEYS.get(sort, "rank")
         direction = "ASC" if order == "asc" else "DESC"
         clauses = ["fm.user_id = ?"]
         params: list[Any] = [user_id]
@@ -71,17 +80,30 @@ class ScholarshipRepo:
             params.append(country)
         decoded = decode_cursor(cursor)
         if decoded:
-            _, row_id = decoded
-            clauses.append("fm.id > ?")
-            params.append(row_id)
+            sort_raw, row_id = decoded
+            # Keyset must match ORDER BY (sort_col, fm.id). Secondary key is
+            # always ascending so ties on the sort column page forward by id.
+            sort_val: Any = None if sort_raw == "" else sort_raw
+            if sort_val is not None and sort_row_key in ("amount", "rank"):
+                try:
+                    sort_val = int(sort_raw)
+                except ValueError:
+                    pass
+            if direction == "ASC":
+                clauses.append(f"({sort_col} > ? OR ({sort_col} = ? AND fm.id > ?))")
+            else:
+                clauses.append(f"({sort_col} < ? OR ({sort_col} = ? AND fm.id > ?))")
+            params.extend([sort_val, sort_val, row_id])
         where = f"WHERE {' AND '.join(clauses)}"
         rows = await self._db.fetch_all(
             f"""SELECT fm.id, fm.public_id, fm.score, fm.rank, fm.eligible, fm.computed_at,
                        sc.public_id AS scholarship_public_id, sc.name, sc.country_code,
                        sc.coverage_type, sc.amount, sc.deadline_at, sc.verified, sc.url,
-                       sc.provider, sc.currency, sc.snapshot_id
+                       sc.provider, sc.currency, sc.snapshot_id,
+                       snap.public_id AS snapshot_public_id
                 FROM funding_matches fm
                 JOIN scholarships sc ON sc.id = fm.scholarship_id
+                LEFT JOIN snapshots snap ON snap.id = sc.snapshot_id
                 {where}
                 ORDER BY {sort_col} {direction}, fm.id ASC
                 LIMIT ?""",
@@ -90,7 +112,9 @@ class ScholarshipRepo:
         rows = [dict(r) for r in rows]
         next_cursor = None
         if len(rows) > limit:
-            next_cursor = f"|{rows[limit - 1]['id']}"
+            last = rows[limit - 1]
+            sort_part = last.get(sort_row_key)
+            next_cursor = f"{'' if sort_part is None else sort_part}|{last['id']}"
             rows = rows[:limit]
         return rows, next_cursor
 
@@ -98,9 +122,11 @@ class ScholarshipRepo:
         row = await self._db.fetch_one(
             """SELECT fm.*, sc.public_id AS scholarship_public_id, sc.name, sc.country_code,
                       sc.coverage_type, sc.amount, sc.deadline_at, sc.verified, sc.url,
-                      sc.provider, sc.currency, sc.snapshot_id
+                      sc.provider, sc.currency, sc.snapshot_id,
+                      snap.public_id AS snapshot_public_id
                FROM funding_matches fm
                JOIN scholarships sc ON sc.id = fm.scholarship_id
+               LEFT JOIN snapshots snap ON snap.id = sc.snapshot_id
                WHERE fm.user_id = ? AND sc.public_id = ?""",
             (user_id, scholarship_public_id),
         )

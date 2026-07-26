@@ -172,8 +172,28 @@ export function Funding() {
       setBudgetLoading(false);
       return;
     }
-    loadBudgetAndSources(targetId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let cancelled = false;
+    (async () => {
+      setBudgetLoading(true);
+      setBudgetError(null);
+      try {
+        const [sourcesPage, budgetOut] = await Promise.all([
+          api.get<{ items: FundingSourceOut[] }>(`/funding/sources${qs({ target_id: targetId })}`),
+          api.get<BudgetOut>(`/funding/budget${qs({ target_id: targetId })}`),
+        ]);
+        if (!cancelled) {
+          setSources(sourcesPage.items);
+          setBudget(budgetOut);
+        }
+      } catch (err) {
+        if (!cancelled) setBudgetError(err instanceof ApiError ? err : null);
+      } finally {
+        if (!cancelled) setBudgetLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [targetId, targetsLoading]);
 
   async function addSource() {

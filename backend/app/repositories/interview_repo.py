@@ -134,11 +134,25 @@ class InterviewRepo:
         )
 
     async def has_active_session(self, user_id: int) -> bool:
-        val = await self._db.fetch_val(
-            "SELECT 1 FROM interview_sessions WHERE user_id = ? AND status = 'active'",
+        return await self.active_session(user_id) is not None
+
+    async def active_session(self, user_id: int) -> dict[str, Any] | None:
+        """The account's in-progress session, or None.
+
+        Returns the row rather than a boolean because the caller has to be able to name the
+        session it is refusing to replace: without the id there is nothing the client can
+        offer to resume or discard, which is what made a dropped session permanent.
+
+        Newest first, defensively. One row is the invariant, and if an older bug ever left
+        two, the one the student was last in is the useful one.
+        """
+        row = await self._db.fetch_one(
+            """SELECT * FROM interview_sessions
+                WHERE user_id = ? AND status = 'active'
+                ORDER BY started_at DESC LIMIT 1""",
             (user_id,),
         )
-        return val is not None
+        return dict(row) if row else None
 
     # -- turns -------------------------------------------------------------
 
@@ -171,6 +185,23 @@ class InterviewRepo:
             (answer_text, audio_path, relevance, consistency, credibility,
              json.dumps(contradicts), feedback_en, feedback_bn, utc_now_iso(), turn_id),
         )
+
+    async def pending_turn(self, session_id: int) -> dict[str, Any] | None:
+        """The turn that has been asked and not answered, with its bilingual text.
+
+        `interview_turns` stores only the English question, so the Bangla and the probes are
+        joined back from the bank. A resumed session in Bangla would otherwise come back in
+        English, which is the one language this product cannot get wrong.
+        """
+        row = await self._db.fetch_one(
+            """SELECT t.id, t.ordinal, t.question_text, b.text_bn, b.probes
+                 FROM interview_turns t
+                 LEFT JOIN interview_bank b ON b.id = t.bank_id
+                WHERE t.session_id = ? AND t.answered_at IS NULL
+                ORDER BY t.ordinal LIMIT 1""",
+            (session_id,),
+        )
+        return dict(row) if row else None
 
     async def list_turns(self, session_id: int) -> list[dict[str, Any]]:
         rows = await self._db.fetch_all(

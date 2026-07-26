@@ -150,6 +150,15 @@ export const dict: Dict = {
     en: "These details stay on our own server and are used to make your answers specific to you. They are never sold or shared, and deleting your account erases all of them.",
     bn: "এই তথ্য আমাদের নিজের সার্ভারেই থাকে এবং আপনার উত্তর আপনার উপযোগী করতে ব্যবহৃত হয়। কখনো বিক্রি বা শেয়ার করা হয় না, এবং অ্যাকাউন্ট মুছলে সবই মুছে যায়।",
   },
+  "profile.opt.bachelor": { en: "Bachelor's", bn: "স্নাতক" },
+  "profile.opt.master": { en: "Master's", bn: "স্নাতকোত্তর" },
+  "profile.opt.phd": { en: "PhD", bn: "পিএইচডি" },
+  "profile.opt.diploma": { en: "Diploma", bn: "ডিপ্লোমা" },
+  "profile.opt.ielts": { en: "IELTS", bn: "আইইএলটিএস" },
+  "profile.opt.toefl": { en: "TOEFL", bn: "টофেল" },
+  "profile.opt.duolingo": { en: "Duolingo English Test", bn: "ডুয়োলিঙ্গো ইংরেজি পরীক্ষা" },
+  "profile.opt.pte": { en: "PTE Academic", bn: "পিটিই একাডেমিক" },
+  "profile.opt.none": { en: "None yet", bn: "এখনো নয়" },
 
   // Theme / lang toggles
   "toggle.theme.light": { en: "Sheet Kagoj", bn: "শীট কাগজ" },
@@ -293,6 +302,11 @@ export const dict: Dict = {
   "dest.shortlist": { en: "Your shortlist", bn: "আপনার তালিকা" },
   "dest.add": { en: "Add to shortlist", bn: "তালিকায় যোগ" },
   "dest.remove": { en: "Remove", bn: "সরান" },
+  "dest.signin.prompt": {
+    en: "Sign in to save countries to your shortlist.",
+    bn: "আপনার সংক্ষিপ্ত তালিকায় দেশ রাখতে সাইন ইন করুন।",
+  },
+  "dest.signin.action": { en: "Sign in", bn: "সাইন ইন" },
 
   // Security
   "sec.title": { en: "Security & Ethics", bn: "নিরাপত্তা ও নীতি" },
@@ -413,6 +427,21 @@ export const dict: Dict = {
 
   // Interview
   "interview.connecting": { en: "Connecting…", bn: "সংযুক্ত হচ্ছে…" },
+
+  // Resuming an interview that was left in progress. The server refuses a second session
+  // while one is active, and this page used to only ever ask for a new one, so a dropped
+  // connection left the room unusable with no way out. These are that way out.
+  "interview.checking": { en: "Checking…", bn: "দেখা হচ্ছে…" },
+  "interview.resume.title": {
+    en: "You have an interview in progress",
+    bn: "আপনার একটি সাক্ষাৎকার চলছে",
+  },
+  "interview.resume.body": {
+    en: "Continue where you left off, or discard it and begin a new one. Discarding keeps the answers you have already given.",
+    bn: "যেখানে থেমেছিলেন সেখান থেকে চালিয়ে যান, অথবা এটি বাতিল করে নতুন শুরু করুন। বাতিল করলেও আপনার দেওয়া উত্তরগুলো থেকে যাবে।",
+  },
+  "interview.resume.action": { en: "Continue", bn: "চালিয়ে যান" },
+  "interview.discard.action": { en: "Discard and start new", bn: "বাতিল করে নতুন শুরু করুন" },
   "interview.typeanswer": { en: "Type your answer…", bn: "আপনার উত্তর লিখুন…" },
   "interview.submit": { en: "Submit answer", bn: "উত্তর জমা দিন" },
   "interview.question": { en: "Question", bn: "প্রশ্ন" },

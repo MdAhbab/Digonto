@@ -32,10 +32,24 @@ class StubRedis:
     def __init__(self) -> None:
         self.added: list[dict[str, Any]] = []
         self.acked: list[str] = []
+        self.fail_xadd = False
+        self.streams: dict[str, list[tuple[str, dict[str, Any]]]] = {}
 
     async def xadd(self, key: str, fields: dict[str, Any], **kwargs: Any) -> str:
+        if self.fail_xadd:
+            from redis import exceptions as redis_exceptions
+
+            raise redis_exceptions.RedisError("stub xadd failure")
         self.added.append({"key": key, "fields": fields, **kwargs})
-        return "1-1"
+        mid = f"{len(self.streams.get(key, [])) + 1}-1"
+        self.streams.setdefault(key, []).append((mid, dict(fields)))
+        return mid
+
+    async def xrange(self, key: str, *, min: str = "-", max: str = "+", count: int | None = None):  # noqa: A002
+        entries = list(self.streams.get(key, []))
+        if count is not None:
+            entries = entries[:count]
+        return entries
 
     async def xack(self, _key: str, _group: str, message_id: str) -> int:
         self.acked.append(message_id)
@@ -95,6 +109,21 @@ async def test_publish_bounds_the_stream(bus: EventBus, redis: StubRedis) -> Non
     await bus.publish(EventType.PORTAL_CHANGED, payload={})
     assert redis.added[0]["maxlen"] == STREAM_MAXLEN
     assert redis.added[0]["approximate"] is True
+
+
+async def test_publish_survives_redis_failure_and_relay_delivers(
+    bus: EventBus, redis: StubRedis, dbs
+) -> None:
+    redis.fail_xadd = True
+    event_id = await bus.publish(EventType.PORTAL_CHANGED, payload={"portal_id": 7})
+    assert await dbs.events.fetch_val("SELECT 1 FROM events WHERE event_id = ?", (event_id,))
+    assert len(redis.added) == 0
+
+    redis.fail_xadd = False
+    relayed = await bus.relay_pending()
+    assert relayed == 1
+    assert len(redis.added) == 1
+    assert redis.added[0]["fields"]["event_id"] == event_id
 
 
 async def test_publish_rejects_an_unknown_type(bus: EventBus) -> None:

@@ -156,7 +156,19 @@ function ChangesTab() {
       .finally(() => setLoading(false));
   }
 
-  useEffect(load, []);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    api
+      .get<{ items: ChangeReviewItem[] }>("/mod/changes?status=pending")
+      .then((r) => !cancelled && setItems(r.items))
+      .catch((err) => !cancelled && setError(err instanceof ApiError ? err : null))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function openAction(id: string, m: "approve" | "reclassify" | "discard", proposed: ChangeCategory | null) {
     setOpenId(id);
@@ -285,7 +297,19 @@ function AnswersTab() {
       .finally(() => setLoading(false));
   }
 
-  useEffect(load, [filter]);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    api
+      .get<{ items: ModAnswerItem[] }>(`/mod/answers${qs({ filter })}`)
+      .then((r) => !cancelled && setItems(r.items))
+      .catch((err) => !cancelled && setError(err instanceof ApiError ? err : null))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [filter]);
 
   async function verify(id: string) {
     try {
@@ -396,11 +420,15 @@ function RefusalsTab() {
   const [country, setCountry] = useState("");
 
   useEffect(() => {
+    let cancelled = false;
     api
       .get<{ items: RefusalClusterOut[] }>("/mod/refusals")
-      .then((r) => setItems(r.items))
-      .catch((err) => setError(err instanceof ApiError ? err : null))
-      .finally(() => setLoading(false));
+      .then((r) => !cancelled && setItems(r.items))
+      .catch((err) => !cancelled && setError(err instanceof ApiError ? err : null))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function submit(clusterId: string) {
@@ -475,11 +503,15 @@ function ScholarshipsTab() {
   const [error, setError] = useState<ApiError | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     api
       .get<{ items: ModScholarshipOut[] }>("/mod/scholarships?verified=false")
-      .then((r) => setItems(r.items))
-      .catch((err) => setError(err instanceof ApiError ? err : null))
-      .finally(() => setLoading(false));
+      .then((r) => !cancelled && setItems(r.items))
+      .catch((err) => !cancelled && setError(err instanceof ApiError ? err : null))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function verify(id: string, verified: boolean) {
@@ -534,6 +566,21 @@ function UsersTab() {
   const [until, setUntil] = useState("");
   const [note, setNote] = useState("");
 
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    api
+      .get<{ items: ModUserListItem[] }>(`/mod/users${qs({ q: q || undefined })}`)
+      .then((r) => !cancelled && setItems(r.items))
+      .catch((err) => !cancelled && setError(err instanceof ApiError ? err : null))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only; search uses form submit
+  }, []);
+
   function load() {
     setLoading(true);
     setError(null);
@@ -543,8 +590,6 @@ function UsersTab() {
       .catch((err) => setError(err instanceof ApiError ? err : null))
       .finally(() => setLoading(false));
   }
-
-  useEffect(load, []);
 
   function openAction(id: string, a: "suspend" | "ban" | "reinstate") {
     setActionId(id);
@@ -693,7 +738,19 @@ function AdaptersTab() {
       .finally(() => setLoading(false));
   }
 
-  useEffect(load, []);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    api
+      .get<{ items: AdapterOut[] }>("/mod/adapters")
+      .then((r) => !cancelled && setItems(r.items))
+      .catch((err) => !cancelled && setError(err instanceof ApiError ? err : null))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function promote(tag: string) {
     try {

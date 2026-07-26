@@ -479,18 +479,28 @@ class GeminiProvider:
 
     async def _generate(self, model: str, req: LLMRequest) -> LLMResponse:
         started = time.monotonic()
-        contents, system = [], None
+        system_parts = []
+        raw_contents: list[dict[str, Any]] = []
         for m in req.messages:
             role = m.get("role")
             if role == "system":
-                system = m.get("content")
+                if m.get("content"):
+                    system_parts.append(str(m.get("content")))
                 continue
-            contents.append(
-                {
-                    "role": "user" if role == "user" else "model",
-                    "parts": [{"text": m.get("content", "")}],
-                }
-            )
+            gemini_role = "user" if role == "user" else "model"
+            content_text = m.get("content", "")
+            raw_contents.append({"role": gemini_role, "text": content_text})
+
+        # Merge consecutive messages with the same role to strictly satisfy Gemini API role alternation rules
+        contents: list[dict[str, Any]] = []
+        for item in raw_contents:
+            if contents and contents[-1]["role"] == item["role"]:
+                contents[-1]["parts"].append({"text": item["text"]})
+            else:
+                contents.append({
+                    "role": item["role"],
+                    "parts": [{"text": item["text"]}],
+                })
 
         body: dict[str, Any] = {
             "contents": contents,
@@ -501,8 +511,8 @@ class GeminiProvider:
                 "thinkingConfig": {"thinkingLevel": "low"},
             },
         }
-        if system:
-            body["systemInstruction"] = {"parts": [{"text": system}]}
+        if system_parts:
+            body["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_parts)}]}
         if req.json_schema:
             body["generationConfig"]["responseMimeType"] = "application/json"
             body["generationConfig"]["responseSchema"] = req.json_schema
@@ -524,6 +534,8 @@ class GeminiProvider:
         text = ""
         for cand in candidates:
             for part in (cand.get("content") or {}).get("parts", []):
+                if part.get("thought"):
+                    continue
                 text += part.get("text", "")
 
         if not text.strip():

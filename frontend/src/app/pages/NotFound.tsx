@@ -1,13 +1,14 @@
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { useI18n } from "../lib/i18n";
 import { Seo, SEO_ROUTES } from "../lib/seo";
 
 export function NotFound() {
   const { t, lang } = useI18n();
+  const { pathname } = useLocation();
   const meta = SEO_ROUTES["*"];
   return (
     <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-2xl flex-col items-center justify-center px-6 py-20 text-center">
-      <Seo title={meta.title[lang]} description={meta.description[lang]} path={meta.path} noindex={meta.noindex} lang={lang} />
+      <Seo title={meta.title[lang]} description={meta.description[lang]} path={pathname} noindex={meta.noindex} lang={lang} />
       {/* boarding pass torn in half */}
       <div className="relative w-full max-w-md">
         <div className="grid grid-cols-[1fr_auto] overflow-hidden rounded-[4px] border border-[var(--hairline)] bg-card">

@@ -9,8 +9,19 @@ from __future__ import annotations
 
 from typing import Any
 
+from urllib.parse import urlsplit, urlunsplit
+
 from app.db.connection import Database
 from app.repositories._util import new_ulid, utc_now_iso
+
+
+def normalize_portal_url(url: str) -> str:
+    """Canonical portal URL: no trailing slash on non-root paths."""
+    parts = urlsplit(url.strip())
+    path = parts.path or "/"
+    if path != "/":
+        path = path.rstrip("/") or "/"
+    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
 
 # Columns `patch` may write. Identity (id, public_id, url), provenance
 # (discovered_from_portal_id, discovered_at) and created_at are deliberately absent:
@@ -77,6 +88,7 @@ class PortalRepo:
     ) -> dict[str, Any]:
         public_id = new_ulid()
         now = utc_now_iso()
+        url = normalize_portal_url(url)
         await self._db.execute(
             """INSERT INTO portals
                (public_id, url, kind, country_code, label, parser_key, crawl_cron,
@@ -111,6 +123,7 @@ class PortalRepo:
         numerous and change less often than the index that links them, so they
         should not multiply the crawl budget by MAX_CHILD_PAGES.
         """
+        url = normalize_portal_url(url)
         label = self._child_label(url)
         await self._db.execute(
             """INSERT OR IGNORE INTO portals

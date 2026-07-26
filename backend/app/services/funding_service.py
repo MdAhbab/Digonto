@@ -10,26 +10,57 @@ and `solvency_rules`, none of which needs a model call.
 from __future__ import annotations
 
 import logging
+import re
 
 from app.agents.khoji import score_eligibility
-from app.errors import NotFound
+from app.config import Settings
+from app.errors import NotFound, ValidationProblem
 from app.events.bus import EventBus, EventType
 from app.llm.router import ModelRouter
 from app.repositories.budget_repo import BudgetRepo
+from app.repositories.document_repo import DocumentRepo
 from app.repositories.profile_repo import ProfileRepo
 from app.repositories.scholarship_repo import ScholarshipRepo
 from app.repositories.target_repo import TargetRepo
+from app.security.vault_crypto import decrypt_field, unwrap_dek
 
 log = logging.getLogger(__name__)
 
 _SOURCE_LABELS_EN = {"own_funds": "Family / personal savings", "awards": "Scholarship awards"}
 _SOURCE_LABELS_BN = {"own_funds": "পরিবার / ব্যক্তিগত সঞ্চয়", "awards": "বৃত্তির অর্থ"}
 
+# Preferred extracted field keys for an invoice / consultancy quote amount.
+_AMOUNT_FIELD_KEYS = (
+    "amount_bdt",
+    "quoted_bdt",
+    "total_bdt",
+    "quoted_amount",
+    "total_fee",
+    "amount",
+    "total",
+    "fee",
+)
+
+
+def _parse_bdt_amount(raw: str) -> int | None:
+    """Parse a printed money string into a non-negative integer BDT amount."""
+    cleaned = re.sub(r"[^\d.]", "", raw.replace(",", ""))
+    if not cleaned:
+        return None
+    try:
+        value = float(cleaned)
+    except ValueError:
+        return None
+    if value < 0:
+        return None
+    return int(round(value))
+
 
 class FundingService:
     def __init__(
         self, scholarships: ScholarshipRepo, budgets: BudgetRepo, profiles: ProfileRepo,
         targets: TargetRepo, bus: EventBus, router: ModelRouter,
+        documents: DocumentRepo | None = None, settings: Settings | None = None,
     ) -> None:
         self._scholarships = scholarships
         self._budgets = budgets
@@ -37,6 +68,8 @@ class FundingService:
         self._targets = targets
         self._bus = bus
         self._router = router
+        self._documents = documents
+        self._settings = settings
 
     # -- scholarships --------------------------------------------------
 
@@ -74,7 +107,11 @@ class FundingService:
                 }
                 for rr in reasons
             ],
-            "citation": {"snapshot_id": str(r["snapshot_id"])} if r.get("snapshot_id") else None,
+            "citation": (
+                {"snapshot_id": r["snapshot_public_id"]}
+                if r.get("snapshot_public_id")
+                else None
+            ),
         }
 
     async def get_scholarship(self, user_id: int, public_id: str) -> dict:
@@ -343,6 +380,48 @@ class FundingService:
         },
     )
 
+    async def _quoted_bdt_from_document(self, user_id: int, doc: dict) -> int | None:
+        """Derive a consultancy quote amount from extracted vault fields.
+
+        Returns None when no usable amount field is present (caller turns that
+        into 422). Never invents a figure.
+        """
+        if self._documents is None or self._settings is None:
+            return None
+        field_hashes = await self._documents.get_field_hashes(doc["id"])
+        if not field_hashes:
+            return None
+        try:
+            dek = unwrap_dek(doc["wrapped_dek"], user_id=user_id, settings=self._settings)
+        except Exception as exc:  # noqa: BLE001 - treat unreadable vault material as validation
+            log.warning("fee_check: cannot unwrap dek for doc=%s err=%s", doc.get("public_id"), exc)
+            return None
+
+        candidate_keys = [k for k in _AMOUNT_FIELD_KEYS if k in field_hashes]
+        for key in field_hashes:
+            if key in candidate_keys:
+                continue
+            lowered = key.casefold()
+            if any(token in lowered for token in ("amount", "total", "fee", "quoted")):
+                candidate_keys.append(key)
+
+        for key in candidate_keys:
+            enc = await self._documents.get_field_encrypted(doc["id"], key)
+            if not enc:
+                continue
+            try:
+                raw = decrypt_field(enc, dek)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "fee_check: decrypt failed doc=%s field=%s err=%s",
+                    doc.get("public_id"), key, exc,
+                )
+                continue
+            parsed = _parse_bdt_amount(raw)
+            if parsed is not None:
+                return parsed
+        return None
+
     async def fee_check(
         self, user_id: int, *, consultancy: str | None, quoted_bdt: int | None,
         country: str | None, document_id: str | None,
@@ -361,13 +440,41 @@ class FundingService:
         every taka of it while the official amounts are unverified, and it is labelled
         `unjustified` rather than presented as a computed fair price.
         """
+        document_row_id: int | None = None
+        if document_id is not None:
+            if self._documents is None:
+                raise ValidationProblem(
+                    detail_en="Document lookup is unavailable for fee checks right now.",
+                    detail_bn="এখন ফি যাচাইয়ের জন্য নথি খোঁজা যাচ্ছে না।",
+                )
+            doc = await self._documents.get_by_public_id(user_id, document_id)
+            if doc is None:
+                raise ValidationProblem(
+                    detail_en="That document was not found in your vault.",
+                    detail_bn="আপনার ভল্টে সেই নথিটি পাওয়া যায়নি।",
+                )
+            document_row_id = doc["id"]
+            if quoted_bdt is None:
+                quoted_bdt = await self._quoted_bdt_from_document(user_id, doc)
+                if quoted_bdt is None:
+                    raise ValidationProblem(
+                        detail_en=(
+                            "Could not read a quoted amount from that document. "
+                            "Enter the amount manually, or re-upload a clearer invoice."
+                        ),
+                        detail_bn=(
+                            "সেই নথি থেকে কোটেড পরিমাণ পড়া যায়নি। পরিমাণটি নিজে দিন, "
+                            "অথবা আরও স্পষ্ট চালান আপলোড করুন।"
+                        ),
+                    )
+
         if quoted_bdt is None:
-            raise NotFound(
+            raise ValidationProblem(
                 detail_en="Provide a quoted amount, or upload the invoice as a document first.",
                 detail_bn="একটি কোটেড পরিমাণ দিন, অথবা প্রথমে চালানটি নথি হিসেবে আপলোড করুন।",
             )
         if quoted_bdt < 0:
-            raise NotFound(
+            raise ValidationProblem(
                 detail_en="A quoted amount cannot be negative.",
                 detail_bn="কোটেড পরিমাণ ঋণাত্মক হতে পারে না।",
             )
@@ -404,7 +511,7 @@ class FundingService:
         fair_bdt = None
         quote = await self._budgets.create_fee_quote(
             user_id=user_id, consultancy=consultancy, quoted_bdt=quoted_bdt,
-            country_code=country, document_id=None, fair_bdt=fair_bdt,
+            country_code=country, document_id=document_row_id, fair_bdt=fair_bdt,
         )
         for line in lines:
             await self._budgets.add_fee_line(quote["id"], **line, snapshot_id=None)

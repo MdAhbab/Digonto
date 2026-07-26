@@ -5,6 +5,8 @@ api_contract.md section 4.
 
 from __future__ import annotations
 
+import sqlite3
+
 from app.errors import Conflict, NotFound
 from app.events.bus import EventBus, EventType
 from app.repositories.profile_repo import ProfileRepo
@@ -23,8 +25,26 @@ class ProfileService:
         return await self._profiles.get(user_id)
 
     async def update_profile(self, user_id: int, user_public_id: str, patch: dict) -> dict:
-        fields = {k: v for k, v in patch.items() if v is not None}
-        result = await self._profiles.upsert(user_id, fields)
+        # Caller already used exclude_unset: explicit nulls clear fields; omitted
+        # keys are left alone. Do not strip None here.
+        fields = dict(patch)
+        if not fields:
+            existing = await self._profiles.get(user_id)
+            if existing is None:
+                raise NotFound(
+                    detail_en="You have not set up a profile yet.",
+                    detail_bn="আপনি এখনও প্রোফাইল তৈরি করেননি।",
+                )
+            return existing
+        try:
+            result = await self._profiles.upsert(user_id, fields)
+        except sqlite3.IntegrityError as exc:
+            # Create-race is recovered inside ProfileRepo.upsert; remaining
+            # IntegrityErrors are CHECK / NOT NULL violations → 409, not 500.
+            raise Conflict(
+                detail_en="Could not save that profile update.",
+                detail_bn="প্রোফাইল আপডেট সংরক্ষণ করা যায়নি।",
+            ) from exc
         await self._bus.publish(
             EventType.PROFILE_UPDATED,
             user_id=user_id,

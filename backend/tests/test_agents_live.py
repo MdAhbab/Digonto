@@ -189,17 +189,65 @@ async def test_porter_alert_quotes_and_is_bilingual(router: ModelRouter) -> None
 def test_khoji_hard_criteria_are_pure_arithmetic() -> None:
     from app.agents.khoji import _fails_hard_criteria
 
+    # Criteria come from scholarship_criteria rows, not root min_cgpa fields.
     # 3.0 on a 5.0 scale normalises to 2.4 on a 4.0 scale, below a 3.3 floor.
     assert _fails_hard_criteria(
-        {"cgpa": 3.0, "cgpa_scale": 5.0}, {"min_cgpa": 3.3}
+        {"cgpa": 3.0, "cgpa_scale": 5.0},
+        {
+            "criteria": [
+                {
+                    "criterion_key": "cgpa_min",
+                    "operator": "gte",
+                    "value": "3.3",
+                    "is_hard": 1,
+                }
+            ]
+        },
     ) == "cgpa_min"
     # 3.6 on a 4.0 scale clears it.
     assert _fails_hard_criteria(
-        {"cgpa": 3.6, "cgpa_scale": 4.0}, {"min_cgpa": 3.3}
+        {"cgpa": 3.6, "cgpa_scale": 4.0},
+        {
+            "criteria": [
+                {
+                    "criterion_key": "cgpa_min",
+                    "operator": "gte",
+                    "value": "3.3",
+                    "is_hard": 1,
+                }
+            ]
+        },
     ) is None
     assert _fails_hard_criteria(
-        {"degree_level": "bachelor"}, {"degree_levels": ["master", "phd"]}
+        {"degree_level": "bachelor"},
+        {
+            "criteria": [
+                {
+                    "criterion_key": "degree_level",
+                    "operator": "in",
+                    "value": '["master", "phd"]',
+                    "is_hard": 1,
+                }
+            ]
+        },
     ) == "degree_level"
+    # A zero scale must not ZeroDivisionError; treat as unverified (not a fail).
+    assert (
+        _fails_hard_criteria(
+            {"cgpa": 3.0, "cgpa_scale": 0},
+            {
+                "criteria": [
+                    {
+                        "criterion_key": "cgpa_min",
+                        "operator": "gte",
+                        "value": "3.0",
+                        "is_hard": 1,
+                    }
+                ]
+            },
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -210,12 +258,52 @@ async def test_khoji_every_score_carries_reasons(router: ModelRouter) -> None:
         "english_overall": 7.0, "graduation_year": 2025, "study_gap_years": 0,
     }
     scholarships = [
-        {"public_id": "SCH-1", "name": "Chevening", "provider": "UK Government",
-         "country_code": "uk", "coverage_type": "full", "min_cgpa": 3.0,
-         "degree_levels": ["master"], "fields": None, "soft_criteria": "leadership"},
-        {"public_id": "SCH-2", "name": "Doctoral Fellowship", "provider": "X",
-         "country_code": "de", "coverage_type": "full", "min_cgpa": 3.0,
-         "degree_levels": ["phd"], "fields": None, "soft_criteria": "research"},
+        {
+            "public_id": "SCH-1",
+            "name": "Chevening",
+            "provider": "UK Government",
+            "country_code": "uk",
+            "coverage_type": "full",
+            "fields": None,
+            "soft_criteria": "leadership",
+            "criteria": [
+                {
+                    "criterion_key": "cgpa_min",
+                    "operator": "gte",
+                    "value": "3.0",
+                    "is_hard": 1,
+                },
+                {
+                    "criterion_key": "degree_level",
+                    "operator": "in",
+                    "value": '["master"]',
+                    "is_hard": 1,
+                },
+            ],
+        },
+        {
+            "public_id": "SCH-2",
+            "name": "Doctoral Fellowship",
+            "provider": "X",
+            "country_code": "de",
+            "coverage_type": "full",
+            "fields": None,
+            "soft_criteria": "research",
+            "criteria": [
+                {
+                    "criterion_key": "cgpa_min",
+                    "operator": "gte",
+                    "value": "3.0",
+                    "is_hard": 1,
+                },
+                {
+                    "criterion_key": "degree_level",
+                    "operator": "in",
+                    "value": '["phd"]',
+                    "is_hard": 1,
+                },
+            ],
+        },
     ]
     out = await khoji.score_eligibility(
         profile=profile, scholarships=scholarships, router=router
@@ -300,15 +388,12 @@ def test_dalil_forces_high_risk_categories() -> None:
     assert dalil.HIGH_RISK_CATEGORIES == {"document_retention", "guarantee", "refund"}
 
 
-def test_bicharok_rejects_a_non_image() -> None:
+@pytest.mark.asyncio
+async def test_bicharok_rejects_a_non_image() -> None:
     """PDFs must be rasterised upstream rather than guessed at."""
-    import asyncio
-
     with pytest.raises(ValueError, match="expects an image"):
-        asyncio.run(
-            bicharok.analyse_rejection(
-                document_bytes=b"%PDF-1.4", mime_type="application/pdf", router=None  # type: ignore[arg-type]
-            )
+        await bicharok.analyse_rejection(
+            document_bytes=b"%PDF-1.4", mime_type="application/pdf", router=None  # type: ignore[arg-type]
         )
 
 

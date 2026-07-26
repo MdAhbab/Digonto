@@ -189,9 +189,9 @@ class RateLimit:
     """Redis token-bucket rate limit dependency, per api_contract.md section 14.
 
     Usage: `Depends(RateLimit("ask_hourly", limit=30, window_s=3600))`. The
-    bucket key is scoped by user id when the caller is authenticated (set by
-    get_current_user earlier in the same request's dependency chain) and
-    falls back to the client IP for public routes such as the Truth Ledger.
+    bucket key is scoped by user id when the caller is authenticated
+    (`Depends(get_optional_user)` inside `__call__`) and falls back to the
+    client IP for anonymous routes such as the Truth Ledger.
     """
 
     def __init__(self, scope: str, limit: int, window_s: int) -> None:
@@ -199,16 +199,25 @@ class RateLimit:
         self.limit = limit
         self.window_s = window_s
 
-    def _identity(self, request: Request) -> str:
+    def _identity(
+        self, request: Request, user: Mapping[str, Any] | None
+    ) -> str:
+        if user is not None:
+            return f"u:{user['id']}"
         user_id = getattr(request.state, "user_id", None)
         if user_id is not None:
             return f"u:{user_id}"
         client_host = request.client.host if request.client else "unknown"
         return f"ip:{client_host}"
 
-    async def __call__(self, request: Request, response: Response) -> None:
+    async def __call__(
+        self,
+        request: Request,
+        response: Response,
+        user: Mapping[str, Any] | None = Depends(get_optional_user),
+    ) -> None:
         redis_client = request.app.state.redis
-        key = f"rl:{self.scope}:{self._identity(request)}"
+        key = f"rl:{self.scope}:{self._identity(request, user)}"
         now = time.time()
 
         try:
@@ -216,13 +225,26 @@ class RateLimit:
                 _TOKEN_BUCKET_LUA, 1, key, self.limit, self.window_s, now
             )
         except Exception as exc:  # noqa: BLE001
-            # Redis being unreachable used to 500 every rate-limited route, which
-            # is most of the product: a cache and bus outage became a total
-            # outage. Fail open instead. The trade-off is deliberate and worth
-            # stating: with Redis down an abusive caller is unthrottled for the
-            # duration, but the alternative denies service to every legitimate
-            # student for the same duration. The model's own concurrency limit
-            # (OLLAMA_NUM_PARALLEL) remains the backstop against overload.
+            # Auth scopes fail closed: a Redis outage must not open an unthrottled
+            # login/signup spray window. Everywhere else fails open so a cache
+            # outage does not become a total product outage; OLLAMA_NUM_PARALLEL
+            # remains the backstop against model overload.
+            if self.scope.startswith("auth_"):
+                log.error(
+                    "rate limiter unavailable, failing closed scope=%s err=%s",
+                    self.scope,
+                    exc,
+                )
+                raise RateLimited(
+                    detail_en=(
+                        "Sign-in is temporarily unavailable. Please wait a moment "
+                        "and try again."
+                    ),
+                    detail_bn=(
+                        "সাইন-ইন সাময়িকভাবে অনুপলব্ধ। একটু অপেক্ষা করে আবার চেষ্টা করুন।"
+                    ),
+                    retry_after=30,
+                )
             log.error("rate limiter unavailable, failing open scope=%s err=%s", self.scope, exc)
             response.headers["X-RateLimit-Bypassed"] = "limiter-unavailable"
             return

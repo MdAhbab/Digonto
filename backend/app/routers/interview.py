@@ -123,6 +123,32 @@ async def list_sessions(
     return Page(items=items, next_cursor=None, total=len(items))
 
 
+@router.get("/sessions/active", response_model=SessionOut | None)
+async def get_active_session(
+    user: Mapping = Depends(get_current_user),
+    interview: InterviewService = Depends(get_interview_service),
+) -> SessionOut | None:
+    """The session in progress, or null.
+
+    Declared before `/sessions/{session_id}` so "active" is not captured as a session id.
+    The Interview Room reads this on entry: without it the only way to discover an
+    in-progress session was to try to start a new one and be refused.
+    """
+    row = await interview.active_session(user["id"])
+    return _session_out(row) if row else None
+
+
+@router.post("/sessions/{session_id}/abandon", response_model=SessionOut)
+async def abandon_session(
+    session_id: str,
+    user: Mapping = Depends(get_current_user),
+    interview: InterviewService = Depends(get_interview_service),
+) -> SessionOut:
+    """Give up on a session so a new one can be started. Answers already given are kept."""
+    row = await interview.abandon_session(user["id"], session_id)
+    return _session_out(row)
+
+
 @router.get("/sessions/{session_id}/report", response_model=InterviewReportOut)
 async def get_report(
     session_id: str,
@@ -173,6 +199,13 @@ _PARTIAL_MIN_NEW_BYTES = 96 * 1024  # ~3 s at 16 kHz mono 16-bit
 _PARTIAL_MIN_INTERVAL_S = 4.0
 _PARTIAL_MAX_PER_UTTERANCE = 4
 
+_VOICE_FALLBACK_EN = (
+    "Nothing intelligible was heard in that recording. Try again, or type your answer."
+)
+_VOICE_FALLBACK_BN = (
+    "এই রেকর্ডিংয়ে বোধগম্য কিছু শোনা যায়নি। আবার চেষ্টা করুন, অথবা লিখে উত্তর দিন।"
+)
+
 
 async def _send_answer_result(
     websocket: WebSocket,
@@ -200,8 +233,8 @@ async def _send_answer_result(
     await websocket.send_json(PhaseMessage(phase="speaking").model_dump(by_alias=True))
     await websocket.send_json(QuestionMessage(**result["question"]).model_dump(by_alias=True))
     await websocket.send_json(PhaseMessage(phase="listening").model_dump(by_alias=True))
-    # submit_answer records against the *last* turn in the session; re-read so
-    # the next answer scores against the newly added turn.
+    # Turns are inserted up front; re-read so the next answer scores against
+    # the still-pending turn after this one was recorded.
     return await interview.get_session(user_id, session_id)
 
 
@@ -248,7 +281,27 @@ async def interview_ws(websocket: WebSocket, session_id: str) -> None:
 
     _active_ws_users.add(user["id"])
     await websocket.accept()
+
+    # Send the outstanding question before waiting for anything.
+    #
+    # Without this, connecting to a session already in progress produced a live socket that
+    # sat silent: the client showed the interview as active and displayed no question,
+    # because the only question it had ever been sent came back in the `POST /sessions`
+    # response it no longer had. A reload was enough to lose it permanently.
+    #
+    # Harmless on a fresh session. The client has just been given the same first question in
+    # the create response, and re-sending the turn the session is genuinely waiting on cannot
+    # put the two out of step.
+    pending = await interview.current_question(session)
+    if pending is not None:
+        await websocket.send_json(QuestionMessage(**pending).model_dump(by_alias=True))
+    await websocket.send_json(PhaseMessage(phase="listening").model_dump(by_alias=True))
+
     recording_audio = False
+    audio_buf = bytearray()
+    partial_count = 0
+    last_partial_at = 0.0
+    bytes_at_last_partial = 0
     try:
         while True:
             message = await websocket.receive()
@@ -272,40 +325,48 @@ async def interview_ws(websocket: WebSocket, session_id: str) -> None:
                 msg_type = payload.get("type")
                 if msg_type == "answer_text":
                     answer = str(payload.get("text", ""))
-                    await websocket.send_json(PhaseMessage(phase="thinking").model_dump(by_alias=True))
-                    result = await interview.submit_answer(user["id"], session, answer)
-                    if result["kind"] == "complete":
-                        await websocket.send_json(
-                            SessionCompleteMessage(report_id=result["report_id"]).model_dump(by_alias=True)
-                        )
+                    session = await _send_answer_result(
+                        websocket, interview, user["id"], session, session_id, answer
+                    )
+                    if session is None:
                         break
-                    await websocket.send_json(
-                        ScoreMessage(**result["score"]).model_dump(by_alias=True)
-                    )
-                    await websocket.send_json(
-                        QuestionMessage(**result["question"]).model_dump(by_alias=True)
-                    )
-                    await websocket.send_json(PhaseMessage(phase="listening").model_dump(by_alias=True))
-                    # submit_answer records against the *last* turn in the
-                    # session; re-read so the next answer_text scores
-                    # against the newly added turn.
-                    session = await interview.get_session(user["id"], session_id)
                 elif msg_type == "audio_start":
                     recording_audio = True
+                    audio_buf = bytearray()
+                    partial_count = 0
+                    last_partial_at = 0.0
+                    bytes_at_last_partial = 0
+                elif msg_type == "audio_end":
+                    if not recording_audio:
+                        continue
+                    recording_audio = False
+                    audio_bytes = bytes(audio_buf)
+                    audio_buf.clear()
+                    transcript = await transcribe(audio_bytes, "audio/wav")
+                    if not transcript["text"]:
+                        await websocket.send_json(
+                            WsErrorMessage(
+                                detail_en=transcript["detail_en"] or _VOICE_FALLBACK_EN,
+                                detail_bn=transcript["detail_bn"] or _VOICE_FALLBACK_BN,
+                            ).model_dump(by_alias=True)
+                        )
+                        continue
                     await websocket.send_json(
-                        WsErrorMessage(
-                            detail_en=(
-                                "Voice mode is not available yet: no speech-to-text service "
-                                "is wired up in this deployment. Please answer as text."
-                            ),
-                            detail_bn=(
-                                "ভয়েস মোড এখনও উপলব্ধ নয়: এই ডিপ্লয়মেন্টে কোনো স্পিচ-টু-টেক্সট "
-                                "পরিষেবা যুক্ত নেই। অনুগ্রহ করে টেক্সটে উত্তর দিন।"
-                            ),
+                        TranscriptFinal(
+                            text=transcript["text"],
+                            confidence=transcript["confidence"],
                         ).model_dump(by_alias=True)
                     )
-                elif msg_type == "audio_end":
-                    recording_audio = False
+                    session = await _send_answer_result(
+                        websocket,
+                        interview,
+                        user["id"],
+                        session,
+                        session_id,
+                        transcript["text"],
+                    )
+                    if session is None:
+                        break
                 else:
                     await websocket.send_json(
                         WsErrorMessage(
@@ -313,12 +374,45 @@ async def interview_ws(websocket: WebSocket, session_id: str) -> None:
                             detail_bn=f"অজানা বার্তার ধরন '{msg_type}'।",
                         ).model_dump(by_alias=True)
                     )
-            elif message.get("bytes") is not None:
-                # Audio frames between audio_start/audio_end. No STT
-                # pipeline exists to consume them (see module docstring);
-                # frames are accepted and discarded rather than buffered
-                # forever or fabricating a transcript from them.
-                _ = recording_audio
+            elif (chunk := message.get("bytes")) is not None:
+                if not recording_audio:
+                    continue
+                if len(audio_buf) + len(chunk) > _MAX_UTTERANCE_BYTES:
+                    recording_audio = False
+                    audio_buf.clear()
+                    await websocket.send_json(
+                        WsErrorMessage(
+                            detail_en=(
+                                "That recording is too long. Answer in under two minutes "
+                                "and try again, or type your answer."
+                            ),
+                            detail_bn=(
+                                "রেকর্ডিংটি অনেক লম্বা। দুই মিনিটের মধ্যে উত্তর দিয়ে আবার "
+                                "চেষ্টা করুন, অথবা লিখে উত্তর দিন।"
+                            ),
+                        ).model_dump(by_alias=True)
+                    )
+                    continue
+                audio_buf.extend(chunk)
+                now = time.monotonic()
+                new_bytes = len(audio_buf) - bytes_at_last_partial
+                if (
+                    partial_count < _PARTIAL_MAX_PER_UTTERANCE
+                    and new_bytes >= _PARTIAL_MIN_NEW_BYTES
+                    and (now - last_partial_at) >= _PARTIAL_MIN_INTERVAL_S
+                ):
+                    prefix = wav_prefix(bytes(audio_buf))
+                    if prefix is not None:
+                        partial = await transcribe(prefix, "audio/wav")
+                        if partial["text"]:
+                            await websocket.send_json(
+                                TranscriptPartial(text=partial["text"]).model_dump(
+                                    by_alias=True
+                                )
+                            )
+                    partial_count += 1
+                    last_partial_at = now
+                    bytes_at_last_partial = len(audio_buf)
     except WebSocketDisconnect:
         pass
     finally:

@@ -108,6 +108,15 @@ class TargetRepo:
         )
         return dict(row) if row else None
 
+    async def get_target_by_id(self, user_id: int, target_id: int) -> dict[str, Any] | None:
+        row = await self._db.fetch_one(
+            """SELECT st.id, st.public_id, st.programme_id, st.visa_type, st.rank,
+                      st.status, st.created_at, st.user_id
+               FROM student_targets st WHERE st.user_id = ? AND st.id = ?""",
+            (user_id, target_id),
+        )
+        return dict(row) if row else None
+
     async def create_target(
         self, user_id: int, programme_id: int, visa_type: str | None
     ) -> dict[str, Any]:

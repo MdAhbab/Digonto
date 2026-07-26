@@ -138,7 +138,10 @@ async def app_context() -> AsyncIterator[AppContext]:
 
     ledger = LedgerService(portals, snapshots)
     vault = VaultService(documents, audits, profiles, targets, bus, router, settings)
-    funding = FundingService(scholarships, budgets, profiles, targets, bus, router)
+    funding = FundingService(
+        scholarships, budgets, profiles, targets, bus, router,
+        documents=documents, settings=settings,
+    )
     moderation_service = ModerationService(
         moderation, snapshots, answers, portals, scholarships, users, bus
     )

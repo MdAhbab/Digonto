@@ -117,15 +117,33 @@ async def sync_kb_version(
                 embedded_by_hash.setdefault(r["text_hash"], r["qdrant_point_id"])
 
         to_embed = [p for p in current if p["text_hash"] not in embedded_by_hash]
-        if not to_embed and live is not None:
-            return  # every current passage is already live, by hash; nothing to do
+        current_hashes = {p["text_hash"] for p in current}
+        stale_hashes = set(embedded_by_hash) - current_hashes if live is not None else set()
+        if not to_embed and not stale_hashes and live is not None:
+            return  # every current passage is live and nothing stale remains
 
         # The embedding HTTP call happens before any DB write below, per the
         # "never hold a write transaction across a model call" rule.
         vectors = await embed_texts(http_client, settings, [p["text"] for p in to_embed])
-        if not vectors:
+        if not vectors and stale_hashes:
+            vectors = []
+        elif not vectors and not stale_hashes:
             return
-        vector_size = len(vectors[0])
+        vector_size = len(vectors[0]) if vectors else None
+        if vector_size is None and live is not None:
+            sample = await dbs.app.fetch_one(
+                """SELECT kc.qdrant_point_id FROM kb_chunks kc
+                   WHERE kc.kb_version_id = ? LIMIT 1""",
+                (live["id"],),
+            )
+            if sample is None:
+                return
+            fetched_vec = await qdrant.retrieve(
+                live["qdrant_collection"], ids=[sample["qdrant_point_id"]], with_vectors=True
+            )
+            if not fetched_vec or fetched_vec[0].vector is None:
+                return
+            vector_size = len(fetched_vec[0].vector)
 
         version_no = (live["version_no"] + 1) if live else 1
         collection_name = f"kb_v{version_no}"
@@ -234,7 +252,7 @@ async def _handle_kb_chunk_updated(
     if message.get("type") != EventType.KB_CHUNK_UPDATED.value:
         return
     payload = message.get("payload") or {}
-    if payload.get("passage_id") is None:
+    if payload.get("passage_id") is None and not payload.get("sync"):
         return
     await sync_kb_version(dbs=dbs, bus=bus, settings=settings, http_client=http_client, qdrant=qdrant)
 

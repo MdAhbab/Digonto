@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -181,8 +182,30 @@ async def run_migrations(dbs: Databases) -> None:
     Call once during application startup, after `dbs.connect_all()` and before
     the app accepts traffic. Raises MigrationError if an already-applied
     file's checksum no longer matches what is recorded.
+
+    A file lock serialises migrators so the API and worker containers do not
+    apply the same migration concurrently against one SQLite file.
     """
-    await _apply(dbs.app, MIGRATIONS_ROOT / "app", label="app")
-    await _apply(dbs.events, MIGRATIONS_ROOT / "events", label="events")
-    await _apply(dbs.learn, MIGRATIONS_ROOT / "learn", label="learn")
+    lock_path = dbs.app.path.parent / ".migrate.lock"
+    with _migration_leader_lock(lock_path):
+        await _apply(dbs.app, MIGRATIONS_ROOT / "app", label="app")
+        await _apply(dbs.events, MIGRATIONS_ROOT / "events", label="events")
+        await _apply(dbs.learn, MIGRATIONS_ROOT / "learn", label="learn")
     log.info("migrations up to date")
+
+
+@contextmanager
+def _migration_leader_lock(lock_path: Path):
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - Windows dev without worker/API race
+        yield
+        return
+
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)

@@ -312,9 +312,13 @@ def _below_prefix(path: str, base_prefix: str) -> str:
     if not base_prefix:
         return path.lower()
     trimmed = path.rstrip("/")
-    if trimmed.lower().startswith(base_prefix.lower()):
-        return trimmed[len(base_prefix):].lower()
-    return trimmed.lower()
+    base_lower = base_prefix.lower().rstrip("/")
+    trimmed_lower = trimmed.lower()
+    if trimmed_lower == base_lower:
+        return ""
+    if trimmed_lower.startswith(f"{base_lower}/"):
+        return trimmed_lower[len(base_lower) :]
+    return trimmed_lower
 
 
 def _acceptable_child(absolute: str, *, base_domain: str, base_prefix: str) -> str | None:
@@ -915,6 +919,7 @@ async def crawl_portal(
         return
 
     if not await _robots.allowed(http_client, portal["url"]):
+        await portals.patch(portal_id, {"last_fetch_at": utc_now_iso()})
         log.info("robots.txt disallows portal_id=%s url=%s; skipping", portal_id, portal["url"])
         return
 
@@ -982,6 +987,26 @@ async def crawl_portal(
 
     previous = await snapshots.latest_for_portal(portal_id)
     if previous is not None and previous["content_hash"] == content_hash:
+        if await _repair_incomplete_snapshot(
+            dbs=dbs,
+            bus=bus,
+            portal=portal,
+            snapshot=previous,
+            snapshots=snapshots,
+            passages=passages,
+            now=now,
+        ):
+            await portals.patch(
+                portal_id,
+                {
+                    "last_fetch_at": now,
+                    "last_status": "ok",
+                    "consecutive_failures": 0,
+                    **validators,
+                },
+            )
+            return
+
         await portals.patch(
             portal_id,
             {
@@ -1101,6 +1126,92 @@ async def _expand_children(
             "discovered %d child page(s) under portal_id=%s (%s)",
             registered, portal["id"], portal["label"],
         )
+
+
+async def _portal_changed_emitted(dbs: Databases, snapshot_id: int) -> bool:
+    row = await dbs.events.fetch_val(
+        """SELECT 1 FROM events
+           WHERE type = ? AND json_extract(payload, '$.snapshot_id') = ?
+           LIMIT 1""",
+        (EventType.PORTAL_CHANGED.value, snapshot_id),
+    )
+    return row is not None
+
+
+async def _repair_incomplete_snapshot(
+    *,
+    dbs: Databases,
+    bus: EventBus,
+    portal: dict[str, Any],
+    snapshot: dict[str, Any],
+    snapshots: SnapshotRepo,
+    passages: list[dict[str, Any]],
+    now: str,
+) -> bool:
+    """Re-finish a hash-matched snapshot that never got passages or portal.changed."""
+    snapshot_id = snapshot["id"]
+    stored_passages = await snapshots.list_passages(snapshot_id)
+    missing_passages = bool(passages) and not stored_passages
+    missing_event = not await _portal_changed_emitted(dbs, snapshot_id)
+    if not missing_passages and not missing_event:
+        return False
+
+    if missing_passages:
+        async with dbs.app.transaction() as tx:
+            for p in passages:
+                await tx.execute(
+                    """INSERT INTO passages
+                       (snapshot_id, ordinal, section_path, text, text_hash, lang, char_count)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        snapshot_id,
+                        p["ordinal"],
+                        p["section_path"],
+                        p["text"],
+                        p["text_hash"],
+                        p["lang"],
+                        p["char_count"],
+                    ),
+                )
+
+    if missing_event:
+        prev_row = await dbs.app.fetch_one(
+            """SELECT id FROM snapshots
+               WHERE portal_id = ? AND id != ?
+               ORDER BY fetched_at DESC LIMIT 1""",
+            (portal["id"], snapshot_id),
+        )
+        await bus.publish(
+            EventType.PORTAL_FETCHED,
+            payload={
+                "portal_id": portal["id"],
+                "portal_public_id": portal["public_id"],
+                "changed": True,
+                "repaired": True,
+            },
+            actor="worker:crawler",
+            subject_type="portal",
+            subject_id=portal["public_id"],
+        )
+        await bus.publish(
+            EventType.PORTAL_CHANGED,
+            payload={
+                "portal_id": portal["id"],
+                "portal_public_id": portal["public_id"],
+                "snapshot_id": snapshot_id,
+                "snapshot_public_id": snapshot["public_id"],
+                "previous_snapshot_id": prev_row["id"] if prev_row else None,
+                "repaired": True,
+            },
+            actor="worker:crawler",
+            subject_type="snapshot",
+            subject_id=snapshot["public_id"],
+        )
+    log.info(
+        "repaired incomplete snapshot portal_id=%s snapshot_id=%s passages=%s event=%s",
+        portal["id"], snapshot_id, missing_passages, missing_event,
+    )
+    return True
 
 
 async def _write_changed_snapshot(

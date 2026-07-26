@@ -36,6 +36,7 @@ from app.db.migrate import run_migrations
 from app.events.bus import EventBus
 from app.llm.router import ModelRouter
 from app.repositories.portal_repo import PortalRepo
+from app.events.outbox_relay import RELAY_INTERVAL_SECONDS, relay_outbox
 from app.workers import (
     crawler,
     differ,
@@ -43,6 +44,7 @@ from app.workers import (
     embedder,
     insights,
     learner,
+    recovery,
     retention,
     student_reports,
 )
@@ -61,6 +63,12 @@ _CRAWL_JOB_PREFIX = "crawl:"
 # demand via `python -m app.workers.learner`.
 _LEARNING_CYCLE_INTERVAL_DAYS = 21
 _TRAINING_JOB_POLL_MINUTES = 30
+
+# How often to sweep for work whose "in progress" marker outlived the work itself. Fifteen
+# minutes is shorter than the tightest staleness window in app/workers/recovery.py (30
+# minutes for a document scan), so a stuck row is never waiting on the sweep interval to be
+# noticed once it qualifies.
+_RECOVERY_SWEEP_MINUTES = 15
 _NIGHTLY_RETENTION_CRON = "17 3 * * *"  # 03:17 UTC: off-peak, off the hour
 
 # 00:40 UTC, so the day it reports on has actually ended, and 23 minutes before the
@@ -99,6 +107,13 @@ class WorkerApp:
         # be brought up standalone.
         await run_migrations(self.dbs)
 
+        await relay_outbox(self.bus)
+
+        # Same reason as in app/main.py: a marker left by the process that just stopped is
+        # cleared before anything new starts. Run in both processes because either can be
+        # brought up alone, and doing it twice is harmless: the second pass finds nothing.
+        await recovery.recover_interrupted_work(self.dbs, self.settings)
+
         self._consumer_tasks = [
             asyncio.create_task(
                 differ.consume(self.bus, self.dbs, self.model_router), name="consumer:differ"
@@ -135,6 +150,17 @@ class WorkerApp:
             id="nightly-insights",
             replace_existing=True,
         )
+        # Startup recovery only catches an interruption that took the process with it. A task
+        # that dies inside a process which keeps running leaves the same stuck marker and no
+        # restart to clear it, so the sweep also runs on a timer.
+        self.scheduler.add_job(
+            self._run_recovery,
+            IntervalTrigger(minutes=_RECOVERY_SWEEP_MINUTES),
+            id="recover-interrupted-work",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
         self.scheduler.add_job(
             self._run_learning_cycle,
             IntervalTrigger(days=_LEARNING_CYCLE_INTERVAL_DAYS),
@@ -146,6 +172,14 @@ class WorkerApp:
             IntervalTrigger(minutes=_TRAINING_JOB_POLL_MINUTES),
             id="poll-training-jobs",
             replace_existing=True,
+        )
+        self.scheduler.add_job(
+            self._relay_outbox,
+            IntervalTrigger(seconds=RELAY_INTERVAL_SECONDS),
+            id="relay-event-outbox",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
         )
         self.scheduler.start()
         log.info("digonto worker ready env=%s", self.settings.app_env)
@@ -198,6 +232,9 @@ class WorkerApp:
             if job.id.startswith(_CRAWL_JOB_PREFIX) and job.id not in seen_job_ids:
                 self.scheduler.remove_job(job.id)
 
+    async def _relay_outbox(self) -> None:
+        await relay_outbox(self.bus)
+
     async def _run_retention(self) -> None:
         # The bus is required for the account-purge sweep, which publishes user.deleted.
         await retention.run_nightly(self.dbs, self.settings, bus=self.bus)
@@ -208,6 +245,9 @@ class WorkerApp:
         # them apart would let a purge between the two produce a pair of reports that
         # disagree about how many accounts exist.
         await student_reports.run_nightly(self.dbs, self.settings)
+
+    async def _run_recovery(self) -> None:
+        await recovery.recover_interrupted_work(self.dbs, self.settings)
 
     async def _run_learning_cycle(self) -> None:
         await learner.run_learning_cycle(self.dbs, self.settings)

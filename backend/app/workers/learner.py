@@ -474,9 +474,17 @@ async def check_for_completed_jobs(
                 "UPDATE adapters SET status = 'failed', notes = ? WHERE id = ?",
                 (str(result.get("error") or "external training run reported failure"), adapter["id"]),
             )
+            await dbs.learn.execute(
+                "UPDATE replay_samples SET exported_in = NULL WHERE exported_in = ?",
+                (adapter["id"],),
+            )
             log.warning("adapter %s training failed: %s", adapter["tag"], result.get("error"))
             continue
 
+        await dbs.learn.execute(
+            "UPDATE adapters SET status = 'candidate' WHERE id = ? AND status = 'training'",
+            (adapter["id"],),
+        )
         await bus.publish(
             EventType.ADAPTER_TRAINED,
             payload={"adapter_id": adapter["id"], "tag": adapter["tag"], "sample_count": adapter["sample_count"]},

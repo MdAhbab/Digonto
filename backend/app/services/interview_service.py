@@ -11,6 +11,7 @@ student's own profile, targets, and budget, which is exactly the tool
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from app.agents.shonchari import compose_report, score_answer
 from app.errors import Conflict, NotFound
@@ -57,31 +58,58 @@ class InterviewService:
         self, user_id: int, *, target_public_id: str | None, country: str | None,
         visa_type: str | None, mode: str,
     ) -> dict:
-        if await self._interviews.has_active_session(user_id):
+        # An active session blocks a new one, which is correct while somebody is answering
+        # and was a trap when nobody was. A WebSocket that drops (a closed tab, a reload, a
+        # restarted server) leaves the row active with nothing to end it, and the interface
+        # only ever asked for a *new* session, so every later attempt was refused and the
+        # Interview Room stayed unusable for that account until the row was edited by hand.
+        #
+        # The refusal now names the session it is refusing for, so the client can offer to
+        # resume or discard it instead of showing a dead end. `POST /sessions/{id}/abandon`
+        # is the discard, and app/workers/recovery.py clears sessions nobody came back to.
+        existing = await self._interviews.active_session(user_id)
+        if existing is not None:
             raise Conflict(
-                detail_en="You already have an interview session in progress.",
-                detail_bn="আপনার একটি ইন্টারভিউ সেশন ইতিমধ্যে চলছে।",
+                detail_en=(
+                    "You already have an interview session in progress. Resume it, or "
+                    "discard it to start a new one."
+                ),
+                detail_bn=(
+                    "আপনার একটি ইন্টারভিউ সেশন ইতিমধ্যে চলছে। সেটি চালিয়ে যান, অথবা নতুন "
+                    "শুরু করতে বাতিল করুন।"
+                ),
+                extra={"active_session_id": existing["public_id"]},
             )
         target_row = None
         if target_public_id:
             target_row = await self._targets.get_target(user_id, target_public_id)
-        session = await self._interviews.create_session(
-            user_id=user_id,
-            target_id=target_row["id"] if target_row else None,
-            country_code=country or (target_row["country_code"] if target_row else None),
-            visa_type=visa_type or (target_row["visa_type"] if target_row else None),
-            mode=mode,
-        )
-        bank = await self._interviews.pick_questions(session["country_code"], session["visa_type"])
+        country_code = country or (target_row["country_code"] if target_row else None)
+        resolved_visa = visa_type or (target_row["visa_type"] if target_row else None)
+        # Pick the sticky bank before inserting a session so an empty bank cannot leave
+        # an orphan active row the student can neither finish nor replace.
+        bank = await self._interviews.pick_questions(country_code, resolved_visa)
         if not bank:
             raise NotFound(
                 detail_en="No interview questions are available for this country yet.",
                 detail_bn="এই দেশের জন্য এখনও কোনো ইন্টারভিউ প্রশ্ন নেই।",
             )
-        first = bank[0]
-        turn_id = await self._interviews.add_turn(
-            session["id"], ordinal=1, bank_id=first["id"], question_text=first["text_en"]
+        session = await self._interviews.create_session(
+            user_id=user_id,
+            target_id=target_row["id"] if target_row else None,
+            country_code=country_code,
+            visa_type=resolved_visa,
+            mode=mode,
         )
+        # Insert every turn up front. Later answers advance through pending_turn only —
+        # never re-sample the bank mid-session.
+        for ordinal, question in enumerate(bank, start=1):
+            await self._interviews.add_turn(
+                session["id"],
+                ordinal=ordinal,
+                bank_id=question["id"],
+                question_text=question["text_en"],
+            )
+        first = bank[0]
         return {
             "session_id": session["public_id"],
             "mode": session["mode"],
@@ -103,22 +131,74 @@ class InterviewService:
     async def list_sessions(self, user_id: int) -> list[dict]:
         return await self._interviews.list_for_user(user_id)
 
+    async def active_session(self, user_id: int) -> dict | None:
+        """The session in progress, if there is one. Read on entering the Interview Room."""
+        return await self._interviews.active_session(user_id)
+
+    async def current_question(self, session: dict) -> dict | None:
+        """The question this session is waiting on, shaped like `first_question`.
+
+        What makes a reconnect a resume rather than a blank screen. The socket used to accept
+        a connection to an active session and then wait silently for an answer to a question
+        it had never sent, so a student who reloaded the page saw an interview in progress
+        with nothing in it.
+
+        Returns None when every asked turn has been answered, which means scoring was
+        interrupted between recording the answer and asking the next question.
+        """
+        turn = await self._interviews.pending_turn(session["id"])
+        if turn is None:
+            return None
+        return {
+            "ordinal": turn["ordinal"],
+            "text_en": turn["question_text"],
+            # The bank row is joined and may be absent if a question was retired since.
+            # Falling back to the English text is right: an empty string would render as a
+            # blank question for anyone reading in Bangla.
+            "text_bn": turn.get("text_bn") or turn["question_text"],
+            "probes": turn.get("probes"),
+            "audio_url": None,
+        }
+
+    async def abandon_session(self, user_id: int, public_id: str) -> dict:
+        """End a session without scoring it, so a new one can start.
+
+        Deliberately not a delete. The questions asked and any answers given stay on record,
+        because a student may have answered five questions before their connection dropped and
+        deleting that is destroying their work to tidy up a status column. `abandoned` was
+        already an allowed value in 008_interview.sql and nothing had ever set it.
+
+        Idempotent: abandoning an already finished session returns it unchanged rather than
+        failing, because the client calls this exactly when its view of the state is stale.
+        """
+        session = await self.get_session(user_id, public_id)
+        if session["status"] != "active":
+            return session
+        await self._interviews.end_session(session["id"], "abandoned")
+        return await self.get_session(user_id, public_id)
+
     async def submit_answer(self, user_id: int, session: dict, answer_text: str) -> dict:
         """Scores the current turn and returns either the next question or
         the session completion payload. The router's WebSocket handler is
         responsible for sequencing `phase` messages around this call.
         """
 
-        turns = await self._interviews.list_turns(session["id"])
-        current = turns[-1]
+        current = await self._interviews.pending_turn(session["id"])
+        if current is None:
+            raise NotFound(
+                detail_en="No active question to answer.",
+                detail_bn="উত্তর দেওয়ার মতো কোনো প্রশ্ন পাওয়া যায়নি।",
+            )
         target_row = None
         if session["target_id"]:
             targets = await self._targets.list_targets(user_id)
             target_row = next((t for t in targets if t.get("id") == session["target_id"]), None)
         file_summary = await self.get_file_summary(user_id, target_row)
-        field_hashes = {}
+        # Flat field_key -> hash map (last write wins across documents) so
+        # Shonchari can compare spoken figures against amount/_no/_number digests.
+        field_hashes: dict[str, str] = {}
         for doc in await self._documents.list_for_user(user_id):
-            field_hashes[doc["public_id"]] = await self._documents.get_field_hashes(doc["id"])
+            field_hashes.update(await self._documents.get_field_hashes(doc["id"]))
 
         result = await score_answer(
             question_text=current["question_text"],
@@ -139,18 +219,10 @@ class InterviewService:
             feedback_bn=result.get("feedback_bn"),
         )
 
-        bank = await self._interviews.pick_questions(
-            session["country_code"], session["visa_type"], limit=8
-        )
-        next_ordinal = len(turns) + 1
-        if next_ordinal > len(bank):
+        next_turn = await self._interviews.pending_turn(session["id"])
+        if next_turn is None:
             return await self._complete_session(user_id, session)
 
-        next_q = bank[next_ordinal - 1]
-        await self._interviews.add_turn(
-            session["id"], ordinal=next_ordinal, bank_id=next_q["id"],
-            question_text=next_q["text_en"],
-        )
         return {
             "kind": "question",
             "score": {
@@ -160,10 +232,10 @@ class InterviewService:
                 "contradicts": result.get("contradicts", []),
             },
             "question": {
-                "ordinal": next_ordinal,
-                "text_en": next_q["text_en"],
-                "text_bn": next_q["text_bn"],
-                "probes": next_q.get("probes"),
+                "ordinal": next_turn["ordinal"],
+                "text_en": next_turn["question_text"],
+                "text_bn": next_turn.get("text_bn") or next_turn["question_text"],
+                "probes": next_turn.get("probes"),
                 "audio_url": None,
             },
         }
@@ -198,14 +270,25 @@ class InterviewService:
                 detail_bn="এখনও কোনো রিপোর্ট নেই; আগে সেশনটি শেষ করুন।",
             )
         turns = await self._interviews.list_turns(session["id"])
+
+        def _safe_json_loads(val: Any, default: Any) -> Any:
+            if isinstance(val, (list, dict)):
+                return val
+            if isinstance(val, str) and val.strip():
+                try:
+                    return json.loads(val)
+                except ValueError:
+                    return default
+            return default
+
         return {
             "id": report["public_id"],
             "session_id": session["public_id"],
             "overall": report["overall"],
             "summary_en": report["summary_en"],
             "summary_bn": report["summary_bn"],
-            "strengths": json.loads(report["strengths"] or "[]"),
-            "weaknesses": json.loads(report["weaknesses"] or "[]"),
+            "strengths": _safe_json_loads(report.get("strengths"), []),
+            "weaknesses": _safe_json_loads(report.get("weaknesses"), []),
             "turns": [
                 {
                     "ordinal": t["ordinal"],
@@ -216,7 +299,7 @@ class InterviewService:
                     "credibility": t["credibility"],
                     "feedback_en": t["feedback_en"],
                     "feedback_bn": t["feedback_bn"],
-                    "contradicts": json.loads(t["contradicts"] or "[]"),
+                    "contradicts": _safe_json_loads(t.get("contradicts"), []),
                 }
                 for t in turns
             ],

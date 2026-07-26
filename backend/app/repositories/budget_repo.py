@@ -77,15 +77,26 @@ class BudgetRepo:
         current = budget["own_funds_bdt"] if budget else 0
         new_val = max(0, current + delta_bdt)
         if budget is None:
+            # No cost lines yet: gap is zero once own funds alone are recorded.
             await self.upsert(
                 user_id=user_id, target_id=target_id, tuition_bdt=0, living_bdt=0,
                 travel_bdt=0, visa_fee_bdt=0, awards_bdt=0, own_funds_bdt=new_val,
                 gap_bdt=0, solvency_required_bdt=None, fx_rate_used=None,
             )
         else:
+            # Same arithmetic as MCP compose_budget: costs minus awards minus own funds.
+            gap_bdt = max(
+                0,
+                budget["tuition_bdt"]
+                + budget["living_bdt"]
+                + budget["travel_bdt"]
+                + budget["visa_fee_bdt"]
+                - budget["awards_bdt"]
+                - new_val,
+            )
             await self._db.execute(
-                "UPDATE budgets SET own_funds_bdt = ?, computed_at = ? WHERE id = ?",
-                (new_val, utc_now_iso(), budget["id"]),
+                "UPDATE budgets SET own_funds_bdt = ?, gap_bdt = ?, computed_at = ? WHERE id = ?",
+                (new_val, gap_bdt, utc_now_iso(), budget["id"]),
             )
 
     # -- fx and solvency reference data -----------------------------------

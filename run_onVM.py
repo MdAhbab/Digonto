@@ -54,6 +54,8 @@ ENV_FILE = APP_DIR / ".env.production"
 MIN_RAM_GB = 8
 MIN_DISK_GB = 40
 DRY_RUN = False
+MIN_PYTHON = (3, 10)
+NEXT_UNSUPPORTED_PYTHON = (3, 16)
 
 
 class C:
@@ -121,7 +123,22 @@ def require_root() -> None:
     ok("running as root")
 
 
+def check_python() -> None:
+    found = f"{sys.version_info.major}.{sys.version_info.minor}"
+    if sys.version_info < MIN_PYTHON:
+        die(f"Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ required, found {found}")
+    if sys.version_info >= NEXT_UNSUPPORTED_PYTHON:
+        supported = f"{MIN_PYTHON[0]}.{MIN_PYTHON[1]} to " \
+                    f"{NEXT_UNSUPPORTED_PYTHON[0]}.{NEXT_UNSUPPORTED_PYTHON[1] - 1}"
+        die(
+            f"Python {found} is newer than this dependency set supports "
+            f"(needs {supported})."
+        )
+    ok(f"Python {found}")
+
+
 def check_machine() -> None:
+    check_python()
     if platform.system() != "Linux":
         die("this script provisions a Linux VM; run it on the server, not your laptop")
 
@@ -257,7 +274,7 @@ def write_env(domain: str) -> None:
         EMBED_MODEL=bge-m3
         OLLAMA_KEEP_ALIVE=30m
 
-        SEED_DEMO_DATA=true
+        SEED_DEMO_DATA=false
         """
     )
     ENV_FILE.write_text(body)
@@ -623,8 +640,7 @@ def main() -> None:
   Restart     docker compose -f docker-compose.prod.yml restart api
   Redeploy    sudo python3 run_onVM.py --domain {a.domain} --email {a.email} --update
 
-  {C.Y}Seed accounts are created because SEED_DEMO_DATA=true.
-  Change their passwords in .env.production before public launch.{C.X}
+  {C.DIM}Production uses SEED_DEMO_DATA=false; create accounts via sign-up or mod tools.{C.X}
 """
     )
 

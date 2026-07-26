@@ -25,13 +25,20 @@ from app.errors import AccountBanned, Conflict, NotFound, Unauthorized
 from app.events.bus import EventBus, EventType
 from app.repositories._util import new_ulid, utc_now_iso
 from app.repositories.user_repo import UserRepo
-from app.security.passwords import check_common_password, hash_password, verify_password
-from app.security.tokens import create_access_token, hash_refresh_token, new_refresh_token
-
-# A fixed, valid-looking hash to run `verify_password` against when the email
-# does not exist, so a lookup miss costs about the same wall-clock time as a
-# wrong password on a real account. Never a valid password for any real user.
-_DUMMY_HASH = "$argon2id$v=19$m=65536,t=3,p=4$ZGlnb250b3NhbHQ$Z8x1n8h3vQwq2m2s5r8z1w"
+from app.security.passwords import (
+    DUMMY_HASH_FOR_TIMING,
+    check_common_password,
+    hash_password,
+    verify_password,
+)
+from app.security.tokens import (
+    RefreshOutcome,
+    RefreshTokenState,
+    create_access_token,
+    evaluate_refresh_token,
+    hash_refresh_token,
+    new_refresh_token,
+)
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +49,31 @@ log = logging.getLogger(__name__)
 # Changing it changes the promise, which is why an account already inside the
 # window keeps the date it was given rather than being recomputed from this value.
 DELETION_WINDOW_DAYS = 30
+
+# Online password-guessing backstop. After this many consecutive failures the
+# account refuses further logins until `locked_until`, still with the generic
+# 401 text so lockout cannot be used to confirm an email exists.
+MAX_FAILED_LOGINS = 5
+LOCKOUT_MINUTES = 15
+
+_LOGIN_UNAUTHORIZED_EN = "Email or password is incorrect."
+_LOGIN_UNAUTHORIZED_BN = "ইমেইল অথবা পাসওয়ার্ড সঠিক নয়।"
+
+
+def _parse_locked_until(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        return datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _account_is_locked(row: dict, *, now: datetime | None = None) -> bool:
+    until = _parse_locked_until(row.get("locked_until"))
+    if until is None:
+        return False
+    return until > (now or datetime.now(timezone.utc))
 
 
 class AuthService:
@@ -153,25 +185,35 @@ class AuthService:
         email = email.strip().lower()
         row = await self._users.get_by_email(email)
         if row is None:
-            verify_password(password, _DUMMY_HASH)
+            # Same Argon2 work as a real miss so timing cannot enumerate accounts.
+            verify_password(password, DUMMY_HASH_FOR_TIMING)
             raise Unauthorized(
-                detail_en="Email or password is incorrect.",
-                detail_bn="ইমেইল অথবা পাসওয়ার্ড সঠিক নয়।",
+                detail_en=_LOGIN_UNAUTHORIZED_EN,
+                detail_bn=_LOGIN_UNAUTHORIZED_BN,
             )
-        if row["status"] == "banned":
+        # `verify_password` returns (ok, needs_rehash), and a two-tuple is always
+        # truthy. Unpack, never test the tuple. Always verify before ban/suspend/
+        # lockout responses so those statuses cannot be probed without the password.
+        ok, needs_rehash = verify_password(password, row["password_hash"])
+        if _account_is_locked(row):
+            raise Unauthorized(
+                detail_en=_LOGIN_UNAUTHORIZED_EN,
+                detail_bn=_LOGIN_UNAUTHORIZED_BN,
+            )
+        if not ok:
+            await self._users.record_failed_login(
+                row["id"],
+                lock_after=MAX_FAILED_LOGINS,
+                lock_minutes=LOCKOUT_MINUTES,
+            )
+            raise Unauthorized(
+                detail_en=_LOGIN_UNAUTHORIZED_EN,
+                detail_bn=_LOGIN_UNAUTHORIZED_BN,
+            )
+        if row["status"] in ("banned", "suspended"):
             raise AccountBanned(
                 detail_en=row.get("status_reason_en") or "This account has been banned.",
                 detail_bn=row.get("status_reason_bn") or "এই অ্যাকাউন্টটি নিষিদ্ধ করা হয়েছে।",
-            )
-        # `verify_password` returns (ok, needs_rehash), and a two-tuple is always
-        # truthy. `if not verify_password(...)` was therefore never true, so any
-        # password logged in to any existing account. Unpack, never test the tuple.
-        ok, needs_rehash = verify_password(password, row["password_hash"])
-        if not ok:
-            await self._users.record_failed_login(row["id"])
-            raise Unauthorized(
-                detail_en="Email or password is incorrect.",
-                detail_bn="ইমেইল অথবা পাসওয়ার্ড সঠিক নয়।",
             )
         if needs_rehash:
             # The stored hash used weaker parameters than the current hasher. This is
@@ -191,23 +233,44 @@ class AuthService:
     ) -> tuple[str, str, int]:
         token_hash = hash_refresh_token(refresh_plain)
         token_row = await self._users.get_refresh_token(token_hash)
-        if token_row is None:
+        state = (
+            None
+            if token_row is None
+            else RefreshTokenState(
+                family_id=token_row["family_id"],
+                revoked_at=token_row["revoked_at"],
+                expires_at=token_row["expires_at"],
+            )
+        )
+        outcome = evaluate_refresh_token(state)
+        if outcome in (RefreshOutcome.EXPIRED, RefreshOutcome.UNKNOWN):
             raise Unauthorized(
                 detail_en="Session expired. Please log in again.",
                 detail_bn="সেশনের মেয়াদ শেষ। আবার লগইন করুন।",
             )
-        if token_row["revoked_at"] is not None:
+        if outcome is RefreshOutcome.REUSE_DETECTED:
             # Reuse of an already-rotated token: assume theft, burn the family.
+            assert token_row is not None
             await self._users.revoke_family(token_row["family_id"])
             raise Unauthorized(
                 detail_en="Session invalidated for security. Please log in again.",
                 detail_bn="নিরাপত্তার জন্য সেশন বাতিল হয়েছে। আবার লগইন করুন।",
             )
+        assert token_row is not None
         user_row = await self._users.get_by_id(token_row["user_id"])
-        if user_row is None or user_row["status"] == "banned":
+        if user_row is None or user_row["status"] in ("banned", "suspended"):
             raise Unauthorized(
                 detail_en="Session expired. Please log in again.",
                 detail_bn="সেশনের মেয়াদ শেষ। আবার লগইন করুন।",
+            )
+        # Claim the old token before issuing a replacement so a concurrent
+        # refresh cannot mint a second live child in the same family.
+        claimed = await self._users.claim_refresh_for_rotation(token_row["id"])
+        if not claimed:
+            await self._users.revoke_family(token_row["family_id"])
+            raise Unauthorized(
+                detail_en="Session invalidated for security. Please log in again.",
+                detail_bn="নিরাপত্তার জন্য সেশন বাতিল হয়েছে। আবার লগইন করুন।",
             )
         new_access = create_access_token(user_row["public_id"], user_row["role"])
         new_plain = new_refresh_token()
@@ -219,7 +282,7 @@ class AuthService:
             user_agent=user_agent,
             ip_hash=ip_hash,
         )
-        await self._users.mark_replaced(token_row["id"], new_id)
+        await self._users.set_replaced_by(token_row["id"], new_id)
         return new_access, new_plain, self._settings.jwt_access_ttl_seconds
 
     async def logout(self, refresh_plain: str) -> None:
@@ -253,6 +316,9 @@ class AuthService:
                 detail_bn="নতুন পাসওয়ার্ড অন্তত ৮ অক্ষরের এবং সাধারণ তালিকার বাইরে হতে হবে।",
             )
         await self._users.update_password(user_id, hash_password(new_password))
+        # A password change is a credential reset: every existing refresh family
+        # must die so a stolen cookie cannot mint new access tokens afterward.
+        await self._users.revoke_all_refresh_tokens(user_id)
 
     async def update_consents(self, user_id: int, *, improve_model: bool, usage_analytics: bool) -> dict:
         await self._users.set_consent(user_id, "improve_model", improve_model)

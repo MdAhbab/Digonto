@@ -117,6 +117,18 @@ class AnswerRepo:
         row = await self._db.fetch_one("SELECT * FROM answers WHERE public_id = ?", (public_id,))
         return dict(row) if row else None
 
+    async def get_owned_answer_by_public_id(
+        self, public_id: str, user_id: int
+    ) -> dict[str, Any] | None:
+        """Load an answer only when the owning question belongs to `user_id`."""
+        row = await self._db.fetch_one(
+            """SELECT a.* FROM answers a
+               JOIN questions q ON q.id = a.question_id
+               WHERE a.public_id = ? AND q.user_id = ?""",
+            (public_id, user_id),
+        )
+        return dict(row) if row else None
+
     async def list_citations(self, answer_id: int) -> list[dict[str, Any]]:
         rows = await self._db.fetch_all(
             """SELECT ac.ordinal, ac.quoted_span, s.public_id AS snapshot_public_id,

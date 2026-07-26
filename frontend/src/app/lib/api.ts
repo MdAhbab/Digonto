@@ -58,6 +58,12 @@ export class ApiError extends Error {
   detail_bn: string;
   trace_id: string | null;
   instance: string | null;
+  /** The whole problem body. RFC 9457 allows extra top-level members and the API uses them
+   *  to make an error actionable rather than only readable: a 409 from
+   *  `POST /interview/sessions` carries `active_session_id`, which is what lets the page
+   *  offer to resume the session instead of reporting a dead end. These were being parsed
+   *  and then dropped, so the only part of an error a caller could act on was its text. */
+  problem: ProblemDetail;
 
   constructor(problem: ProblemDetail) {
     super(problem.detail_en || problem.title || "Request failed");
@@ -69,6 +75,12 @@ export class ApiError extends Error {
     this.detail_bn = problem.detail_bn;
     this.trace_id = problem.trace_id ?? null;
     this.instance = problem.instance ?? null;
+    this.problem = problem;
+  }
+
+  /** An extra member of the problem body, if the server sent one. */
+  detail<T = unknown>(key: string): T | undefined {
+    return (this.problem as Record<string, unknown>)[key] as T | undefined;
   }
 }
 
@@ -111,9 +123,18 @@ async function toApiError(res: Response): Promise<ApiError> {
 // Unauthorized handling: refresh-once, then hard redirect to /auth
 // ---------------------------------------------------------------------------
 
+/** Where to send the user after login when refresh fails mid-session (see Auth.tsx). */
+export const AUTH_RETURN_PATH_KEY = "digonto.auth.return";
+
 function forceReauth(): void {
   setAccessToken(null);
   if (typeof window !== "undefined") {
+    const returnPath = `${window.location.pathname}${window.location.search}`;
+    try {
+      sessionStorage.setItem(AUTH_RETURN_PATH_KEY, returnPath);
+    } catch {
+      /* quota / private mode — fall back to default post-login route */
+    }
     window.location.assign("/auth");
   }
 }

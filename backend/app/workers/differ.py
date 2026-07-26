@@ -176,7 +176,36 @@ async def _process_one_diff(
         new_id=new_id,
     )
     if existing_id is not None:
-        return  # a redelivered event already produced this row; do not re-notify
+        if new_id is not None:
+            await bus.publish(
+                EventType.KB_CHUNK_UPDATED,
+                payload={
+                    "passage_id": new_id,
+                    "portal_id": portal_id,
+                    "snapshot_id": to_snapshot_id,
+                    "diff_id": existing_id,
+                    "change_type": diff["change_type"],
+                },
+                actor="worker:differ",
+                subject_type="passage",
+                subject_id=str(new_id),
+            )
+        elif diff["change_type"] == "removed":
+            await bus.publish(
+                EventType.KB_CHUNK_UPDATED,
+                payload={
+                    "passage_id": old_id,
+                    "portal_id": portal_id,
+                    "snapshot_id": to_snapshot_id,
+                    "diff_id": existing_id,
+                    "change_type": "removed",
+                    "sync": True,
+                },
+                actor="worker:differ",
+                subject_type="passage",
+                subject_id=str(old_id or portal_id),
+            )
+        return  # row exists; do not re-notify students
 
     # The model call happens before any write, and the write below is a
     # single statement, not a held transaction, so nothing here holds a DB
@@ -224,6 +253,21 @@ async def _process_one_diff(
             actor="worker:differ",
             subject_type="passage",
             subject_id=str(new_id),
+        )
+    elif diff["change_type"] == "removed":
+        await bus.publish(
+            EventType.KB_CHUNK_UPDATED,
+            payload={
+                "passage_id": old_id,
+                "portal_id": portal_id,
+                "snapshot_id": to_snapshot_id,
+                "diff_id": diff_id,
+                "change_type": "removed",
+                "sync": True,
+            },
+            actor="worker:differ",
+            subject_type="passage",
+            subject_id=str(old_id or portal_id),
         )
 
     if not result["notify"]:

@@ -16,6 +16,7 @@ unlike the others, is constructed with both database handles instead of one.
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import Any
 
 from app.db.connection import Database
@@ -61,12 +62,20 @@ class ProfileRepo:
             ]
             values = [fields.get(c) for c in columns]
             placeholders = ", ".join("?" for _ in columns)
-            await self._db.execute(
-                f"""INSERT INTO profiles (user_id, {", ".join(columns)}, updated_at)
-                    VALUES (?, {placeholders}, ?)""",
-                (user_id, *values, now),
-            )
-        else:
+            try:
+                await self._db.execute(
+                    f"""INSERT INTO profiles (user_id, {", ".join(columns)}, updated_at)
+                        VALUES (?, {placeholders}, ?)""",
+                    (user_id, *values, now),
+                )
+            except sqlite3.IntegrityError:
+                # Another request won the first-create race; fall through to UPDATE.
+                existing = await self.get(user_id)
+                if existing is None:
+                    raise
+        if existing is not None:
+            if not fields:
+                return existing
             sets = ", ".join(f"{k} = ?" for k in fields.keys())
             await self._db.execute(
                 f"UPDATE profiles SET {sets}, updated_at = ? WHERE user_id = ?",

@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from "react-router";
 import { Mail, Lock, User as UserIcon, ArrowRight } from "lucide-react";
 import { useI18n } from "../lib/i18n";
 import { useAuth } from "../lib/auth";
-import { ApiError } from "../lib/api";
+import { ApiError, AUTH_RETURN_PATH_KEY } from "../lib/api";
 import { motion, AnimatePresence } from "motion/react";
 import { Seo, SEO_ROUTES } from "../lib/seo";
 
@@ -14,7 +14,9 @@ export function Auth() {
   const nav = useNavigate();
   const loc = useLocation();
   const { login, signup } = useAuth();
-  const from = (loc.state as { from?: string } | null)?.from ?? "/planner";
+  const storedReturn =
+    typeof sessionStorage !== "undefined" ? sessionStorage.getItem(AUTH_RETURN_PATH_KEY) : null;
+  const from = (loc.state as { from?: string } | null)?.from ?? storedReturn ?? "/planner";
 
   const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
@@ -40,6 +42,11 @@ export function Auth() {
         await login(email, password);
       } else {
         await signup(email, password, displayName.trim());
+      }
+      try {
+        sessionStorage.removeItem(AUTH_RETURN_PATH_KEY);
+      } catch {
+        /* ignore */
       }
       nav(from, { replace: true });
     } catch (err) {

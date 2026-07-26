@@ -21,7 +21,7 @@ import { useState } from "react";
 import { useLocation } from "react-router";
 import { Check, Send } from "lucide-react";
 
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import { useI18n } from "../lib/i18n-context";
 
 const MAX_MESSAGE = 4000;
@@ -70,7 +70,11 @@ export default function FeedbackForm({ compact = false }: { compact?: boolean })
       setEmail("");
     } catch (err) {
       setState("error");
-      setError(err instanceof Error ? err.message : t("feedback.error"));
+      if (err instanceof ApiError) {
+        setError(lang === "en" ? err.detail_en : err.detail_bn);
+      } else {
+        setError(t("feedback.error"));
+      }
     }
   }
 

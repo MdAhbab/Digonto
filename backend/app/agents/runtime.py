@@ -109,7 +109,8 @@ def validate_against_schema(
             got = type(value).__name__
             return [f"{path}: expected {expected}, got {got}"]
 
-    if (enum := schema.get("enum")) and value not in enum:
+    enum = schema.get("enum")
+    if isinstance(enum, (list, tuple, set)) and value not in enum:
         errors.append(f"{path}: {value!r} is not one of {enum}")
 
     if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -119,16 +120,20 @@ def validate_against_schema(
             errors.append(f"{path}: {value} is above the maximum {hi}")
 
     if isinstance(value, dict):
-        for name in schema.get("required", []):
-            if name not in value:
-                errors.append(f"{path}: missing required field {name!r}")
-        for name, subschema in (schema.get("properties") or {}).items():
-            if name in value and isinstance(subschema, dict):
-                errors.extend(
-                    validate_against_schema(
-                        value[name], subschema, path=f"{path}.{name}"
+        required = schema.get("required")
+        if isinstance(required, (list, tuple, set)):
+            for name in required:
+                if name not in value:
+                    errors.append(f"{path}: missing required field {name!r}")
+        props = schema.get("properties")
+        if isinstance(props, dict):
+            for name, subschema in props.items():
+                if name in value and isinstance(subschema, dict):
+                    errors.extend(
+                        validate_against_schema(
+                            value[name], subschema, path=f"{path}.{name}"
+                        )
                     )
-                )
 
     if isinstance(value, list) and isinstance(schema.get("items"), dict):
         for i, item in enumerate(value):

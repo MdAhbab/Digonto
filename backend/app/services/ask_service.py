@@ -292,6 +292,32 @@ class AskService:
                 "ask pipeline failed for question=%s user_id=%s",
                 question_row["public_id"], user_id,
             )
+            # The meta event creates a placeholder answer row with empty text.
+            # Leaving it as a non-refusal blank answer after a crash makes history
+            # show an empty QA pair; finalise it as a refusal instead.
+            if answer_row is not None:
+                latency_ms = int((time.monotonic() - started) * 1000)
+                first_token_ms = (
+                    int((first_token_at - started) * 1000) if first_token_at else latency_ms
+                )
+                try:
+                    await self._answers.update_final(
+                        answer_row["id"],
+                        answer_bn=None,
+                        answer_en=None,
+                        confidence=None,
+                        is_refusal=True,
+                        refusal_reason=(
+                            "Something went wrong while generating the answer. Please try again."
+                        ),
+                        latency_ms=latency_ms,
+                        first_token_ms=first_token_ms,
+                    )
+                except Exception:  # noqa: BLE001 - still emit the SSE error
+                    log.exception(
+                        "could not finalise failed answer row answer_id=%s",
+                        answer_row["public_id"],
+                    )
             yield "error", {
                 "type": "https://digonto.ahbab.dev/errors/ask-pipeline-failed",
                 "title": "Could not generate an answer",
@@ -398,7 +424,11 @@ class AskService:
     async def submit_feedback(
         self, *, user_id: int, answer_public_id: str, rating: str, correction: str | None
     ) -> None:
-        answer = await self._answers.get_answer_by_public_id(answer_public_id)
+        # Ownership join: without it any authenticated user could rate or
+        # correct any answer id they guessed (IDOR on answer_feedback).
+        answer = await self._answers.get_owned_answer_by_public_id(
+            answer_public_id, user_id
+        )
         if answer is None:
             raise NotFound(detail_en="Answer not found.", detail_bn="উত্তরটি পাওয়া যায়নি।")
         await self._answers.upsert_feedback(

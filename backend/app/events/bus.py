@@ -206,27 +206,116 @@ class EventBus:
         )
 
         redis_stream_key = f"{_STREAM_KEY_PREFIX}:{stream_enum.value}"
-        await self._redis.xadd(
+        fields = self._stream_fields(
+            event_id=event_id,
+            type_value=type_enum.value,
+            actor=resolved_actor,
+            user_id=user_id,
+            subject_type=subject_type,
+            subject_id=subject_id,
+            payload_json=payload_json,
+            schema_version=schema_version,
+            created_at=created_at,
+        )
+        try:
+            await self._redis_xadd(redis_stream_key, fields)
+        except redis_exceptions.RedisError as exc:
+            log.error(
+                "redis xadd failed after events.db insert event=%s stream=%s err=%s",
+                event_id, stream_enum.value, exc,
+            )
+        return event_id
+
+    @staticmethod
+    def _stream_fields(
+        *,
+        event_id: str,
+        type_value: str,
+        actor: str,
+        user_id: int | None,
+        subject_type: str | None,
+        subject_id: str | None,
+        payload_json: str,
+        schema_version: int,
+        created_at: str,
+    ) -> dict[str, str]:
+        return {
+            "event_id": event_id,
+            "type": type_value,
+            "actor": actor,
+            "user_id": "" if user_id is None else str(user_id),
+            "subject_type": subject_type or "",
+            "subject_id": subject_id or "",
+            "payload": payload_json,
+            "schema_version": str(schema_version),
+            "created_at": created_at,
+        }
+
+    async def _redis_xadd(self, redis_stream_key: str, fields: dict[str, str]) -> str:
+        return await self._redis.xadd(
             redis_stream_key,
-            # `maxlen` bounds the stream. events.db is the durable archive, so a
-            # Redis stream is only a delivery buffer, and an unbounded one is a
-            # slow memory leak on a VM whose RAM is budgeted for the model.
-            # `approximate` lets Redis trim whole nodes, which is much cheaper.
             maxlen=STREAM_MAXLEN,
             approximate=True,
-            fields={
-                "event_id": event_id,
-                "type": type_enum.value,
-                "actor": resolved_actor,
-                "user_id": "" if user_id is None else str(user_id),
-                "subject_type": subject_type or "",
-                "subject_id": subject_id or "",
-                "payload": payload_json,
-                "schema_version": str(schema_version),
-                "created_at": created_at,
-            },
+            fields=fields,
         )
-        return event_id
+
+    async def relay_pending(self, *, batch_size: int = 200) -> int:
+        """Xadd archived events that are not present on their Redis stream."""
+        scan_limit = max(batch_size * 4, batch_size)
+        rows = await self._events_db.fetch_all(
+            """SELECT event_id, stream, type, actor, subject_type, subject_id,
+                      user_id, payload, schema_version, created_at
+               FROM events ORDER BY event_id DESC LIMIT ?""",
+            (scan_limit,),
+        )
+        if not rows:
+            return 0
+
+        present_by_key: dict[str, set[str]] = {}
+        for stream_enum in EventStream:
+            redis_stream_key = f"{_STREAM_KEY_PREFIX}:{stream_enum.value}"
+            try:
+                entries = await self._redis.xrange(
+                    redis_stream_key, min="-", max="+", count=STREAM_MAXLEN
+                )
+            except redis_exceptions.RedisError as exc:
+                log.warning("outbox relay could not read stream=%s err=%s", stream_enum.value, exc)
+                entries = []
+            present_by_key[redis_stream_key] = {
+                (fields or {}).get("event_id", "")
+                for _mid, fields in entries
+                if fields
+            }
+
+        relayed = 0
+        for row in rows:
+            if relayed >= batch_size:
+                break
+            redis_stream_key = f"{_STREAM_KEY_PREFIX}:{row['stream']}"
+            if row["event_id"] in present_by_key.get(redis_stream_key, set()):
+                continue
+            fields = self._stream_fields(
+                event_id=row["event_id"],
+                type_value=row["type"],
+                actor=row["actor"],
+                user_id=row["user_id"],
+                subject_type=row["subject_type"],
+                subject_id=row["subject_id"],
+                payload_json=row["payload"],
+                schema_version=int(row["schema_version"]),
+                created_at=row["created_at"],
+            )
+            try:
+                await self._redis_xadd(redis_stream_key, fields)
+            except redis_exceptions.RedisError as exc:
+                log.warning(
+                    "outbox relay xadd failed event=%s stream=%s err=%s",
+                    row["event_id"], row["stream"], exc,
+                )
+                continue
+            present_by_key.setdefault(redis_stream_key, set()).add(row["event_id"])
+            relayed += 1
+        return relayed
 
     async def consume(
         self,

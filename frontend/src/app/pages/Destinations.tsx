@@ -1,19 +1,25 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router";
 import { Plus, Check } from "lucide-react";
 import { useI18n } from "../lib/i18n";
 import { useTheme } from "../lib/theme";
+import { useAuth } from "../lib/auth";
 import { PageHeader } from "../components/PageHeader";
 import { Globe } from "../components/Globe";
 import { Seo, SEO_ROUTES } from "../lib/seo";
 import { api, ApiError, type DestinationOut } from "../lib/api";
 
+const shortlistOpts = { skipAuthRedirect: true as const };
+
 export function Destinations() {
   const { t, lang } = useI18n();
   const { theme } = useTheme();
+  const { session } = useAuth();
   const [countries, setCountries] = useState<DestinationOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
   const [pending, setPending] = useState<Set<string>>(new Set());
+  const [signInPrompt, setSignInPrompt] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -34,20 +40,30 @@ export function Destinations() {
     };
   }, []);
 
+  useEffect(() => {
+    if (session?.id) setSignInPrompt(false);
+  }, [session?.id]);
+
   async function toggle(code: string, shortlisted: boolean) {
     if (pending.has(code)) return;
+    if (!session?.id) {
+      setSignInPrompt(true);
+      return;
+    }
     setPending((p) => new Set(p).add(code));
     // optimistic update
     setCountries((prev) => prev.map((c) => (c.id === code ? { ...c, shortlisted: !shortlisted } : c)));
     try {
       if (shortlisted) {
-        await api.del(`/me/shortlist/${encodeURIComponent(code)}`);
+        await api.del(`/me/shortlist/${encodeURIComponent(code)}`, undefined, shortlistOpts);
       } else {
-        await api.put(`/me/shortlist/${encodeURIComponent(code)}`);
+        await api.put(`/me/shortlist/${encodeURIComponent(code)}`, undefined, shortlistOpts);
       }
-    } catch {
-      // revert on failure
+    } catch (err) {
       setCountries((prev) => prev.map((c) => (c.id === code ? { ...c, shortlisted } : c)));
+      if (err instanceof ApiError && err.status === 401) {
+        setSignInPrompt(true);
+      }
     } finally {
       setPending((p) => {
         const next = new Set(p);
@@ -82,6 +98,22 @@ export function Destinations() {
             {t("dest.shortlist")}: {shortlistCount || "—"}
           </p>
         </div>
+
+        {signInPrompt && !session?.id && (
+          <div
+            className="rounded-[4px] border border-[var(--hairline)] bg-secondary/40 p-5 text-sm text-muted-foreground lg:col-span-2"
+            role="status"
+          >
+            <p>{t("dest.signin.prompt")}</p>
+            <Link
+              to="/auth"
+              state={{ from: "/destinations" }}
+              className="focus-ring mt-3 inline-flex h-9 items-center rounded-[3px] bg-primary px-4 text-xs text-primary-foreground"
+            >
+              {t("dest.signin.action")}
+            </Link>
+          </div>
+        )}
 
         {loading && (
           <div className="space-y-px overflow-hidden rounded-[4px] border border-[var(--hairline)]" aria-hidden="true">

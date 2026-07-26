@@ -174,6 +174,20 @@ class Database:
 
         return await self.write(_run)
 
+    async def execute_count(self, sql: str, params: Sequence[Any] = ()) -> int:
+        """Like `execute`, but returns how many rows changed.
+
+        `execute` returns `lastrowid`, which is the right answer for an INSERT and
+        meaningless for an UPDATE or DELETE. A sweep that reports how much it repaired needs
+        the count, and counting with a separate SELECT first is both slower and a race.
+        """
+
+        async def _run(conn: aiosqlite.Connection) -> int:
+            cur = await conn.execute(sql, params)
+            return cur.rowcount or 0
+
+        return await self.write(_run)
+
     async def execute_many(self, sql: str, rows: Sequence[Sequence[Any]]) -> None:
         async def _run(conn: aiosqlite.Connection) -> None:
             await conn.executemany(sql, rows)
