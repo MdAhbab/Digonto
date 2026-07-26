@@ -1,8 +1,22 @@
 # Digonto Agentic Workflows
 
-Seven autonomous agents built on **Gemma 4 E2B native function calling**, served locally by Ollama through its OpenAI-compatible API (`/v1/chat/completions` with `tools`). Any OpenAI-compatible client SDK works against this endpoint unchanged, which keeps the agent code portable. Agents run in the backend's arq worker (see `backend/backend.md`, section 6), are triggered by events or cron, are limited to 8 reasoning-tool steps, and log every tool call to an audit table in `events.db`.
+Seven autonomous agents, each asking **Gemma 4 E2B** for one JSON reply
+constrained to a schema (Ollama's structured-output mode, not native function
+calling and not a hand-written parser over free text), served locally through
+Ollama's OpenAI-compatible API. A shared helper (`app/agents/runtime.py`)
+validates every reply against its schema and retries once, with the
+validation error fed back, if it fails to validate. Agents are called
+directly by the service or worker that owns the moment they run (the diff
+worker calls Porter, `vault_service.py` calls Prohori/Bicharok/Lekhok/Dalil,
+`funding_service.py` calls Khoji, `interview_service.py` calls Shonchari), not
+as jobs on a queue. `events.db` already has an `agent_runs`/`agent_tool_calls`
+schema for a per-agent step cap and a per-tool-call audit trail
+(`backend/backend.md` section 6), but nothing currently writes to either
+table: today's calls are single schema-constrained requests, not an audited,
+multi-step tool-calling loop. Building that loop is tracked future work, not
+a current capability.
 
-**Capability check before building any of this.** `ollama show gemma4:e2b` on the development machine lists `tools`, `vision`, `audio`, and `thinking` alongside `completion`. Tool support is what makes these four agents native function callers rather than regex parsers over free text, so verify it on the cloud VM after pulling the model and refuse to start the API if the capability is absent. Note that the ollama.com library page tables do not show tool support for the E-variants; the local manifest is authoritative. Native `vision` is used by Prohori's `extract_fields`, and native `audio` is used by Shonchari's voice mode, so all four agents plus the voice and document paths run on one served model with no second runtime.
+**Capability check before building any of this.** `ollama show gemma4:e2b` on the development machine lists `tools`, `vision`, `audio`, and `thinking` alongside `completion`. Tool support is confirmed against the live model (`backend/tests/test_model_contracts.py`) and backs the three MCP servers below, independently of the seven agents above, which use schema-constrained generation instead. Note that the ollama.com library page tables do not show tool support for the E-variants; the local manifest is authoritative. Native `vision` is used directly by Prohori's `extract_fields`, Bicharok, and Dalil, over native image types only; a PDF degrades to previously stored fields rather than being rasterised, since no rasterisation step exists in this codebase. Native `audio` is not wired up: Shonchari's interview room accepts typed answers only, because no speech-to-text service is deployed alongside the model.
 
 **Thinking mode is a per-agent decision, not a global switch.** Porter's change triage and any enum classification run with thinking off, because the added reasoning tokens buy nothing and cost latency. Khoji's eligibility scoring and Shonchari's answer scoring run with thinking on, because the quality difference is worth the tokens.
 
@@ -18,7 +32,7 @@ Custom tools are exposed to the model two ways: internal tools (direct async Pyt
 
 **Purpose:** no student should learn about a deadline change after it matters.
 
-**Trigger:** `portal.changed` event from the recurrent crawl loop; also a daily 07:00 sweep.
+**Trigger:** `portal.changed` event from the recurrent crawl loop, consumed by the diff worker (`app/workers/differ.py`). A daily sweep was part of the original design; only the event-driven path is built today.
 
 **Tools:** `digonto-portal-mcp.diff_snapshots`, internal `find_affected_students(portal_id)`, internal `classify_change(diff)` (Gemma call with enum output: deadline, fee, document_requirement, policy, cosmetic), internal `send_alert(student_id, payload)`, internal `update_timeline(student_id, change)`.
 
@@ -30,7 +44,7 @@ Custom tools are exposed to the model two ways: internal tools (direct async Pyt
 
 **Purpose:** replace the consultancy's one real service, document checking, with an auditable free equivalent.
 
-**Trigger:** `vault.doc.added`, `profile.updated`, weekly cron, and on-demand from the Vault page.
+**Trigger:** on-demand only today, from the Vault page (`POST /vault/audit`). Automatic triggering on `vault.doc.added`/`profile.updated` and a weekly cron were part of the original design; neither is wired up yet, since no worker consumes those events for Prohori.
 
 **Tools:** `digonto-vault-mcp.list_documents`, `read_doc_metadata`, `extract_fields`, `flag_document`; internal `get_checklist(university_id, visa_type)` (built from crawled portal snapshots, cited); internal `draft_letter(kind, context)`.
 
@@ -42,7 +56,7 @@ Custom tools are exposed to the model two ways: internal tools (direct async Pyt
 
 **Purpose:** funding is the highest-stakes gap; most students never hear of half the awards they qualify for.
 
-**Trigger:** `profile.updated`, new scholarship index entries from the crawl loop, monthly refresh cron.
+**Trigger:** on-demand only today, via `POST /funding/rematch`. Automatic re-matching on `profile.updated` and a monthly refresh cron were part of the original design; neither is wired up yet.
 
 **Tools:** `digonto-funding-mcp.search_scholarships`, `get_fx_rate`, `get_solvency_rules`, `compose_budget`; internal `score_eligibility(profile, award)` (Gemma structured output with per-criterion reasoning); internal `send_digest`.
 
@@ -102,4 +116,4 @@ Custom tools are exposed to the model two ways: internal tools (direct async Pyt
 
 ## Shared conventions
 
-Every agent: structured JSON outputs validated against Pydantic schemas with one retry on validation failure; all model calls grounded with citations where a factual claim is made; `agent.completed` events carry a typed result consumed by the frontend; per-agent tool allow-lists enforced by the runtime, not by the prompt. Escalation to the model fallback path follows `backend/backend.md` section 9 and is invisible to this document's contracts.
+Every agent: one schema-constrained JSON reply per call, validated with one retry on failure (`app/agents/runtime.py`); model calls grounded with citations where a factual claim is made; no agent has a delete tool. `agent.completed` (`app/events/bus.py`) exists as an event type and is published today only by the interview flow (`app/services/interview_service.py`), at the end of a session; Porter, Prohori, Khoji, Bicharok, Lekhok, and Dalil do not yet publish it. Escalation to the model fallback path follows `backend/backend.md` section 9 and is invisible to this document's contracts.

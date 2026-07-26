@@ -154,7 +154,7 @@ identified, excluded from statistics, and wiped with one command.
 | GET / PATCH | `/me/profile` | student profile |
 | PUT | `/me/consents` | toggle the three consents |
 | GET | `/me/export` | full data export, JSON + files, as a signed download |
-| DELETE | `/me` | hard delete. Requires a fresh OTP; see section 13 |
+| DELETE | `/me` | hard delete. Requires the current password in the body; see section 13 |
 | GET | `/destinations` | country catalogue, public |
 | GET | `/me/shortlist` | shortlisted countries |
 | PUT | `/me/shortlist/{country_code}` | add |
@@ -163,9 +163,13 @@ identified, excluded from statistics, and wiped with one command.
 | GET/POST | `/me/targets` | shortlist of programmes |
 | DELETE | `/me/targets/{id}` | remove |
 
-`GET /destinations` serves `Destinations.tsx`, whose `Country` interface is
-`{id, name, lat, lng, note}`. Two changes: `name` and `note` become bilingual, and
-the mock's English-only `note` becomes citable.
+`GET /destinations` was specified to serve `Destinations.tsx`'s `Country`
+interface, `{id, name, lat, lng, note}` with `name`/`note` made bilingual and
+`note` made citable, shown below as originally specified. **Not implemented**:
+the router raises `NotImplementedError` rather than fabricate the response,
+because `countries` (`docs/database.md` section 3.2) has no `lat`, `lng`,
+`note_en`, `note_bn`, or citation columns. `GET /me/shortlist` raises for the
+same reason. See section 16.
 
 ```json
 { "items": [ {
@@ -375,25 +379,33 @@ consultancy invoice (`document_id`), and returns the itemisation:
 
 ## 10. Interview and Shonchari
 
-Turn-taking with audio needs a socket, not request/response.
+Turn-taking was specified to support audio over a socket, not request/response.
+**As built, only the text path is real.** Voice mode is not implemented: no
+speech-to-text service exists anywhere in this codebase. `audio_start` is
+accepted and answered with a `WsErrorMessage` explaining that voice mode is
+unavailable and asking the student to answer as text; raw audio frames between
+`audio_start`/`audio_end` are accepted and discarded, not transcribed. See
+section 16.
 
 **POST `/interview/sessions`** → `{session_id, mode, first_question}`.
 
-**WS `/interview/sessions/{id}/ws`** — the live channel.
+**WS `/interview/sessions/{id}/ws`** — the live channel. One concurrent session
+per user, enforced in-process (section 14).
 
-Client sends: `{"type":"answer_text","text":"..."}` or binary audio frames framed
-by `{"type":"audio_start"}` / `{"type":"audio_end"}`.
+Client sends: `{"type":"answer_text","text":"..."}` (built), or
+`{"type":"audio_start"}` / `{"type":"audio_end"}` plus binary frames (accepted,
+but answered with an error rather than a transcript; see above).
 
 Server sends, matching the page's `idle → listening → thinking → speaking` machine:
 
-| Message | Payload |
-| --- | --- |
-| `transcript.partial` | `{text}` while the student speaks |
-| `transcript.final` | `{text, confidence}` |
-| `phase` | `{"phase":"thinking"}` replaces the hardcoded 1400 ms timeout |
-| `score` | `{relevance, consistency, credibility, contradicts:[{document_id, field, said, document_says}]}` |
-| `question` | `{ordinal, text_en, text_bn, probes, audio_url?}` |
-| `session.complete` | `{report_id}` |
+| Message | Payload | Status |
+| --- | --- | --- |
+| `phase` | `{"phase":"thinking"}` replaces the hardcoded 1400 ms timeout | built |
+| `score` | `{relevance, consistency, credibility, contradicts:[{document_id, field, said, document_says}]}` | built |
+| `question` | `{ordinal, text_en, text_bn, probes, audio_url?}` | built, `audio_url` unused |
+| `session.complete` | `{report_id}` | built |
+| `transcript.partial` | `{text}` while the student speaks | not implemented, voice mode only |
+| `transcript.final` | `{text, confidence}` | not implemented, voice mode only |
 
 `contradicts` is the feature that matters: it compares a spoken answer against the
 student's own uploaded documents, which is what a visa officer does.
@@ -520,6 +532,15 @@ deletion the user requested themselves, and every one writes an immutable event.
 An adapter passes the automatic gate and *then* waits for a person. The gate stops
 regressions it can measure; the human stops the ones it cannot.
 
+`GET /mod/health`'s `crawl_failures_48h` and `dead_letters` fields are real
+counts from `events.db`. Its `queue_depth_agent` and
+`model_latency_p50_ms`/`p95_ms` fields will currently read `0` and `null`:
+`queue_depth_agent` counts `agent_runs` rows in `('queued','running')`, and
+nothing in this codebase inserts a row into `agent_runs`; the latency
+percentiles read `request_metrics`, and nothing inserts a row there either.
+Both tables exist in the schema for this purpose and are simply not populated
+yet. See section 16.
+
 ### Moderator dashboard
 
 **GET `/mod/overview`** returns the single screen a moderator opens first:
@@ -550,33 +571,45 @@ Reconnect uses `Last-Event-ID`, and the server replays from `events.db`.
 
 ## 13. Privacy operations
 
-**GET `/me/export`** — everything: profile, questions, answers, plan, vault
-metadata, and a signed archive of the actual files. Generated asynchronously,
-delivered by email link, expires in 24 hours.
+**GET `/me/export`** — as built, publishes a `profile.updated` event and returns
+`{"status": "processing", "requested_at": ...}` immediately. The originally
+specified behaviour, a signed archive of profile, questions, answers, plan, and
+vault metadata delivered by email link, is not implemented: nothing in this
+codebase assembles that archive or sends the email. Section 16 lists this
+explicitly.
 
-**DELETE `/me`** — requires a fresh OTP confirmation in the body. Deletes vault
-files, cascades `app.db`, anonymises `events.db` rows rather than deleting them
-(the audit trail survives without identifying anyone), deletes replay samples, and
-emits `user.deleted`. Returns `202` with a completion receipt sent by email.
+**DELETE `/me`** — requires the current password in the body, not an OTP (this
+system has no OTP subsystem at all; see section 3). Deletes vault files,
+cascades `app.db`, anonymises `events.db` rows rather than deleting them (the
+audit trail survives without identifying anyone), deletes replay samples, and
+emits `user.deleted`. Returns `202` with a receipt in the response body; no
+email is sent, because nothing in this codebase sends email.
 
-**POST `/me/consents/withdraw`** — withdrawing `improve_model` deletes the user's
-replay samples and flags every adapter trained on them for review. Documented
-because "you can withdraw consent" is meaningless if the data is already in a
-model.
+**POST `/me/consents/withdraw`** — specified behaviour: withdrawing
+`improve_model` deletes the user's replay samples and flags every adapter
+trained on them for review, because "you can withdraw consent" is meaningless
+if the data is already in a model. As built, this endpoint raises rather than
+silently doing less than that: no repository exposes "delete this user's
+replay samples" or "flag adapters trained on them" outside of full account
+deletion. Section 16 has the detail.
 
 ---
 
 ## 14. Rate limits
 
+As built (`app/deps.py`'s `RateLimit`, applied per router). There is no
+`/auth/request-code` or `/auth/verify-code`: this system has no OTP step (see
+section 3), so those two rows from the original sketch are removed here
+rather than left describing endpoints that do not exist.
+
 | Scope | Limit | Reason |
 | --- | --- | --- |
-| `POST /auth/request-code` | 3 per email per hour, 10 per IP per hour | OTP abuse |
-| `POST /auth/verify-code` | 5 per code | brute force |
+| `POST /auth/*` (all of section 3) | 120 per IP or user per minute | one shared limit at the router level, not a per-endpoint OTP limit |
 | `POST /ask` | 30 per user per hour, 6 per minute | one model, many students |
-| `POST /vault/documents` | 20 per user per day, 100 MB per day | disk |
-| WS `/interview` | 1 concurrent session per user | GPU or CPU contention |
+| `POST /vault/documents` | 20 per user per day | disk; the 20 MB figure elsewhere is a per-file size cap (`max_upload_bytes`), not a daily aggregate |
+| WS `/interview` | 1 concurrent session per user | enforced by an in-process set in the API process (`app/routers/interview.py`); not Redis-backed, so it only holds across a single-process deployment |
 | Public `GET /ledger/*` | 60 per IP per minute | it is public on purpose |
-| Everything else | 120 per user per minute | |
+| Everything else (`/destinations`, `/funding/*`, `/me/*`, `/meta/*`, `/mod/*`, `/planner/*`, `/vault/*` other than uploads) | 120 per user or IP per minute | |
 
 Exceeding a limit returns `429` with `Retry-After` and a bilingual explanation.
 The Ask limit is real and will be hit; the message must explain that the model is
@@ -590,7 +623,7 @@ Every mock in the frontend and the endpoint that replaces it.
 
 | Page | Mock replaced | Endpoint |
 | --- | --- | --- |
-| `Auth.tsx` | `login(email)` into localStorage | `/auth/request-code`, `/auth/verify-code` |
+| `Auth.tsx` | `login(email)` into localStorage | `POST /auth/signup`, `POST /auth/login` (section 3; email and password, no OTP) |
 | `Ask.tsx` | `seed` array, always-refuse `submit()` | `POST /ask` (SSE), `GET /ask/history` |
 | `Ask.tsx` | citation side sheet | `GET /ledger/snapshots/{id}` |
 | `Planner.tsx` | `initialSteps` (7), `simulate()` | `GET /planner/timeline`, `POST /planner/simulate` |
@@ -613,3 +646,55 @@ product that is a defect, and the fix is content work, not API work. Second, the
 seed data uses two different bilingual patterns: `t()` with a 145-key dictionary,
 and manual `xEn`/`xBn` fields. Server-supplied content uses the `_en`/`_bn` pair
 pattern; the dictionary stays for interface chrome only.
+
+---
+
+## 16. Not yet implemented
+
+Reconciled against the routers as built (`backend/app/routers/`). Everything
+below is specified elsewhere in this document, but does not work yet, each for
+a reason recorded in the router's own docstring rather than left silent.
+
+**`GET /destinations` and `GET /me/shortlist`.** Both raise
+`NotImplementedError`. `DestinationOut` requires `lat`, `lng`, `note_en`, and
+`note_bn`, none of which exist on the `countries` table (`docs/database.md`
+section 3.2), and the seed migration does not add them either. Fixing this
+needs a migration adding those columns, seeded from a real, citable source,
+not fabricated coordinates or prose.
+
+**`POST /me/consents/withdraw`.** Raises `NotImplementedError`. No repository
+exposes "delete this user's `learn.db` replay samples" or "flag every adapter
+trained on them for review" as a standalone operation; the only code that
+touches `replay_samples` for a user is full account deletion
+(`AuthService.delete_account`). Flipping the consent flag without also
+deleting the samples would look like the privacy promise was honoured while
+leaving data a model may have already trained on untouched, which is worse
+than not implementing the endpoint.
+
+**`GET /me/export`.** Returns `{"status": "processing", ...}` and publishes an
+event. It does not assemble the signed archive of profile, questions, answers,
+plan, and vault metadata that this contract specifies, and does not send an
+email, because no email-sending capability exists anywhere in this codebase.
+
+**Interview voice mode.** `audio_start`/`audio_end` framing is accepted over
+the WebSocket, but there is no speech-to-text service anywhere in this
+codebase. The server replies with an error explaining that voice mode is
+unavailable and continues to serve the text path, which is fully real. No
+`transcript.partial`/`transcript.final` message is ever produced.
+
+**Agent execution telemetry.** `events.db` has `agent_runs` (with a per-agent
+`steps_used`/`max_steps`) and `agent_tool_calls` (a per-tool-call audit
+trail), matching an audited, multi-step tool-calling runtime. Nothing in this
+codebase writes to either table: the seven agents each make one
+schema-constrained model call (with one repair retry), not a multi-step
+tool-calling loop, called directly by the owning service or worker rather
+than dispatched through a tracked run. `GET /mod/health`'s `queue_depth_agent`
+and model-latency fields, which read `agent_runs` and `request_metrics`
+respectively, will report `0` and `null` until this is built.
+
+**Auth is plain email and password, not OTP.** Section 3 already states this;
+it is repeated here because two artefacts of an earlier, OTP-based sketch
+survived elsewhere: an original rate-limit table (superseded in section 14)
+and an original frontend-mapping row (superseded in section 15). No
+`/auth/request-code` or `/auth/verify-code` endpoint exists or is planned; this
+system sends no email at all.

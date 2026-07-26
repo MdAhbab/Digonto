@@ -563,6 +563,7 @@ async def _seed_all(
             await bump("audit_findings")
 
         # -- 9. Scholarships and criteria (6) -----------------------------------
+        seeded_scholarship_ids: list[int] = []
         scholarships = [
             (
                 "Commonwealth Shared Scholarship",
@@ -712,6 +713,7 @@ async def _seed_all(
                 ),
             )
             await bump("scholarships")
+            seeded_scholarship_ids.append(sid)
             for criterion_key, operator, value, is_hard, weight in criteria:
                 await run(
                     """INSERT INTO scholarship_criteria
@@ -720,6 +722,121 @@ async def _seed_all(
                     (sid, criterion_key, operator, value, is_hard, weight),
                 )
                 await bump("scholarship_criteria")
+
+        # -- 9b. Funding matches ------------------------------------------------
+        #
+        # `GET /funding/scholarships` reads `funding_matches`, not the award
+        # catalogue, because the page ranks awards against one student. Without
+        # a seeded match set the Funding page is empty until somebody presses
+        # rematch, which is the wrong first impression on a fresh deployment.
+        #
+        # These scores are deterministic placeholders derived from how many of
+        # each award's hard criteria this seeded profile satisfies, and they are
+        # replaced by Khoji's real scoring the moment `POST /funding/rematch`
+        # runs. The reason strings say so, rather than pretending a model wrote
+        # them.
+        for rank, sid in enumerate(seeded_scholarship_ids, start=1):
+            hard_criteria = [
+                r
+                for r in await conn.execute_fetchall(
+                    "SELECT criterion_key, is_hard FROM scholarship_criteria WHERE scholarship_id = ?",
+                    (sid,),
+                )
+            ]
+            met = sum(1 for r in hard_criteria if not r[1])
+            score = round(met / len(hard_criteria), 2) if hard_criteria else 0.5
+            match_id = await run(
+                """INSERT INTO funding_matches
+                   (public_id, user_id, scholarship_id, score, rank, eligible,
+                    kb_version_id, computed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, NULL, ?)""",
+                (new_ulid(), judge_id, sid, score, rank, 1 if score >= 0.5 else 0, now_iso),
+            )
+            await bump("funding_matches")
+            for criterion_key, is_hard in hard_criteria:
+                await run(
+                    """INSERT INTO match_reasons
+                       (match_id, criterion_key, met, reason_en, reason_bn, weight)
+                       VALUES (?, ?, ?, ?, ?, 1.0)""",
+                    (
+                        match_id,
+                        criterion_key,
+                        0 if is_hard else 1,
+                        "Not yet scored by the eligibility agent. Press Rematch for a live assessment.",
+                        "যোগ্যতা এজেন্ট এখনো এটি মূল্যায়ন করেনি। সরাসরি মূল্যায়নের জন্য পুনরায় মেলান চাপুন।",
+                    ),
+                )
+                await bump("match_reasons")
+
+        # -- 9c. FX rate, solvency rule, and one computed budget ---------------
+        #
+        # The Funding page has three panels. The award list above fills one.
+        # The other two read `fx_rates`, `solvency_rules` and `budgets`, and
+        # 404 when those are empty, so the page is half broken without this.
+        #
+        # The solvency figure is the published UK maintenance requirement for
+        # a course in London: 1,483 pounds per month for a maximum of nine
+        # months, which is 13,347 pounds, held for 28 consecutive days. It is
+        # attached to the seeded UK portal snapshot so the citation the page
+        # renders points at a real archived row rather than nowhere.
+        await run(
+            """INSERT INTO fx_rates (base, quote, rate, source, as_of)
+               VALUES ('GBP', 'BDT', 152.0, 'seeded demonstration rate', ?)""",
+            (now_iso[:10],),
+        )
+        await bump("fx_rates")
+
+        await run(
+            """INSERT INTO solvency_rules
+               (country_code, visa_type, amount, currency, hold_days,
+                basis_note_en, basis_note_bn, snapshot_id, effective_from)
+               VALUES ('uk', 'student', 13347, 'GBP', 28, ?, ?, ?, ?)""",
+            (
+                "Courses in London: 1,483 pounds of living costs per month, "
+                "for a maximum of nine months, held for 28 consecutive days.",
+                "লন্ডনের কোর্সের ক্ষেত্রে: মাসে ১,৪৮৩ পাউন্ড জীবনযাত্রার খরচ, "
+                "সর্বোচ্চ নয় মাসের জন্য, টানা ২৮ দিন ধরে রাখতে হবে।",
+                snap_uk2,
+                now_iso[:10],
+            ),
+        )
+        await bump("solvency_rules")
+
+        # Tuition is the Manchester programme's own figure converted at the
+        # rate above; living, travel and the visa fee follow the same rule.
+        # gap_bdt is the arithmetic, not an estimate: cost minus funding.
+        tuition_bdt = 4_712_000
+        living_bdt = 2_029_000
+        travel_bdt = 145_000
+        visa_fee_bdt = 118_000
+        awards_bdt = 1_500_000
+        own_funds_bdt = 3_800_000
+        gap_bdt = (
+            tuition_bdt + living_bdt + travel_bdt + visa_fee_bdt
+            - awards_bdt - own_funds_bdt
+        )
+        await run(
+            """INSERT INTO budgets
+               (public_id, user_id, target_id, tuition_bdt, living_bdt, travel_bdt,
+                visa_fee_bdt, awards_bdt, own_funds_bdt, gap_bdt,
+                solvency_required_bdt, fx_rate_used, computed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 152.0, ?)""",
+            (
+                new_ulid(),
+                judge_id,
+                target_manchester,
+                tuition_bdt,
+                living_bdt,
+                travel_bdt,
+                visa_fee_bdt,
+                awards_bdt,
+                own_funds_bdt,
+                gap_bdt,
+                int(13347 * 152),
+                now_iso,
+            ),
+        )
+        await bump("budgets")
 
         # -- 10. Plan: 7 steps, mixed statuses, 2 changes -----------------------
         plan_id = await run(

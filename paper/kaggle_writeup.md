@@ -16,9 +16,9 @@ deadlines, and scholarship rules are all published. They are published in dense
 administrative English, spread across dozens of portals, and revised without
 announcement.
 
-That gap feeds an intermediary market of roughly 2,000 consultancy firms, of
-which only about 400 are registered with the sector association. The rest operate
-on a general trade licence with no specialised supervision. Students pay fees
+That gap feeds an intermediary market of hundreds of consultancy firms, with no
+mandatory registration system for this specific sector. Most operate on a
+general trade licence with no specialised supervision. Students pay fees
 that can reach a semester's tuition for advice they cannot verify, and errors
 made by an agent appear in the student's own visa file.
 
@@ -76,13 +76,17 @@ Verified with `ollama show`: 2.3B effective parameters (5.1B total, using
 Per-Layer Embeddings), a 131,072 token context window, Apache 2.0 licence, and
 native support for tool calling, vision, audio, and thinking mode.
 
-Those capabilities decided the architecture. Native **tool calling** drives the
-seven agents with no hand-written parser. Native **vision** extracts fields from
-uploaded transcripts and bank statements. Native **audio** accepts Bangla voice
-input for users who prefer speaking to typing. One model, one runtime, no second
-service. It fits in the RAM of a modest machine, which is why inference is
-self-hosted and passports never leave our deployment, and why the service can be
-free permanently.
+Those capabilities decided the architecture. Native **vision** extracts fields
+from uploaded transcripts and bank statements. Native **tool calling** is
+verified against the live model and backs three reusable MCP servers; the
+seven agents themselves ask the model for one schema-constrained structured
+reply each, with no hand-written parser, rather than calling a tool. Native
+**audio** is a model capability we have not wired up yet: voice input is
+planned, and today the interview room accepts typed answers only, because no
+speech-to-text service is deployed. One model, one runtime, for everything
+that is built. It fits in the RAM of a modest machine, which is why inference
+is self-hosted and passports never leave our deployment, and why the service
+can be free permanently.
 
 **Architecture around the model: RC-RAG (Recurrent Continual RAG), three loops.**
 
@@ -136,10 +140,13 @@ semantic cache invalidation, timeline re-planning for affected students, and a
 Bangla alert. That fan-out is the specific reason the design is event-driven
 rather than request-driven.
 
-The seven agents run on Gemma 4 tool calling through Ollama's OpenAI-compatible
-endpoint, with custom tools exposed through three MCP servers (portal, vault,
-funding). Agents are capped at eight tool steps, hold runtime-enforced tool
-allow-lists (no agent has a delete tool), and log every call to an audit table.
+The seven agents each ask Gemma 4 for one schema-constrained structured reply
+through Ollama's OpenAI-compatible endpoint, with one automatic repair attempt
+if a reply fails to validate. No agent has a delete tool. Three MCP servers
+(portal, vault, funding) expose the same repositories and services as callable
+tools for any external MCP client, independent of the agents; the model's
+native tool-calling capability, verified against the live model, is what those
+servers rely on, not what the seven agents themselves use.
 
 ## 5. Impact and validation
 

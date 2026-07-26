@@ -24,9 +24,10 @@ Department of Computer Science and Engineering, Institution Name, Dhaka, Banglad
 Bangladeshi students sent 667.77 million US dollars abroad for education in
 fiscal year 2025, and UNESCO counted 52,799 studying overseas in 2023. Most
 applicants rely on private consultancy firms, because official admission and visa
-information is published in complex English and is revised without notice. About
-2,000 such firms operate, and only about 400 are registered with the sector
-association. We present Digonto, a free navigator that answers study abroad
+information is published in complex English and is revised without notice.
+Hundreds of such firms operate, and no mandatory registration system exists
+for this specific sector. We present Digonto, a free navigator that answers
+study abroad
 questions in Bangla, monitors official portals for changes, and acts for the
 student through seven autonomous agents. Digonto introduces Recurrent Continual
 Retrieval-Augmented Generation, or RC-RAG. RC-RAG places three loops of different
@@ -57,12 +58,15 @@ eligibility rules. The difficulty is that this material is written in dense
 administrative English, is spread across dozens of sites, and is edited without
 any announcement.
 
-That gap has produced a large intermediary market: about 2,000 consultancy
-firms operate in Bangladesh, of which only about 400 are registered with the
-Foreign Admission and Career Development Consultant Association of Bangladesh
-[3], and the rest run on a general trade licence with no specialised
-supervision. Research on commission-based recruitment agents reports weak
-oversight and a structural conflict of interest, since the agent is paid by
+That gap has produced a large intermediary market: hundreds of consultancy
+firms operate in Bangladesh, and no mandatory registration system exists for
+overseas education consultancies specifically [3]. A voluntary sector
+association, the Foreign Admission and Career Development Consultant
+Association of Bangladesh, exists for firms that choose to join it, but
+membership is not required to operate, so most run on a general trade licence
+with no specialised supervision. Research on commission-based recruitment
+agents reports weak oversight and a structural conflict of interest, since the
+agent is paid by
 the institution while advising the student [6], [7], and an agent's errors
 then appear in the applicant's own file. One United States university found
 about 65 percent of its applications from India and Bangladesh likely

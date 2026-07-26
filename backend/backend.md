@@ -40,7 +40,7 @@ second runtime.
 | API framework | FastAPI (Python 3.12, uvicorn) | async-native, typed contracts via Pydantic v2, SSE support |
 | Relational store | **SQLite 3.45+ in WAL mode**, accessed with `aiosqlite` | single-VM deployment, one file to back up, no separate database container, no network round trip per query |
 | Event bus | Redis Streams + consumer groups | one dependency gives bus, cache, and rate limiting |
-| Task workers | `arq` (async Redis queue) | lighter than Celery, same Redis instance |
+| Task workers | Redis Streams consumer groups, driven directly by the event bus | one dependency gives the bus and the job model together; no second queue package needed |
 | Scheduler | APScheduler inside a dedicated worker | cron-style recurrent crawls |
 | LLM serving | Ollama running `gemma4:e2b` | on-VM, private, OpenAI-compatible endpoint at `/v1` |
 | Embeddings | `bge-m3` via Ollama (multilingual, handles Bangla) | one runtime for all models |
@@ -48,8 +48,27 @@ second runtime.
 | Object store | Local encrypted filesystem volume, served only through signed API routes | pairs with SQLite; removes the MinIO container |
 | Cache | Redis (separate DB index) | semantic cache, session cache, HTTP cache |
 | Backup | Litestream, streaming the SQLite file to off-VM object storage | continuous point-in-time recovery, no dump window |
-| Reverse proxy | Caddy | automatic TLS for digonto.ahbab.dev |
+| Reverse proxy | nginx, on the host, not in the container stack | automatic TLS for digonto.ahbab.dev via certbot, and response buffering turned off on the streaming routes so tokens are not held back |
 | Deployment | Docker Compose on the cloud VM | single-file reproducible deploy |
+
+`requirements.txt` still pins `arq`, but nothing under `app/workers` imports it:
+the worker process (`app/workers/main.py`) runs the crawl schedule, the diff
+and embed consumers, and the nightly retention and periodic learning jobs as
+plain asyncio tasks over `EventBus.consume` (Redis Streams, at-least-once
+delivery, idempotent via `applied_events`) plus APScheduler for cron timing.
+Reaching for `arq` as well would stand up a second, incompatible job queue
+next to the bus this build already has. Drop the pin the next time
+`requirements.txt` is touched.
+
+The retrieval pipeline itself lives in `app/rag/` (`pipeline.py`,
+`retrieval.py`, `cache.py`, `embeddings.py`): hybrid dense-plus-BM25 search
+fused with reciprocal rank fusion, a semantic cache in a Qdrant collection,
+and the schema-constrained, streaming grounded-answer generation described in
+section 3. Three MCP servers (`app/mcp/portal_server.py`,
+`vault_server.py`, `funding_server.py`) expose the ledger, vault, and funding
+repositories and services as callable tools for any MCP client, such as
+Claude Code during development; they are a reusable interface alongside the
+product, not a mechanism the seven agents call into (section 6).
 
 ### 1.1 Working with SQLite correctly
 
@@ -170,7 +189,7 @@ gain is worth the extra tokens. Make it a per-call flag, never a global setting.
 
 ## 4. Caching plan (three layers)
 
-1. **HTTP layer:** Caddy plus `Cache-Control` for static assets and snapshot
+1. **HTTP layer:** nginx plus `Cache-Control` for static assets and snapshot
    reads; ETag on vault listings.
 2. **Semantic cache:** described above. Keyed by (embedding, KB version, target
    country). TTL 7 days, invalidated by events, never served across KB versions.
@@ -178,7 +197,11 @@ gain is worth the extra tokens. Make it a per-call flag, never a global setting.
    resident in RAM, and a stable system prefix (system prompt plus tool schemas)
    so prefix reuse applies. Embedding cache in Redis keyed by text hash.
 
-## 5. API surface (contract sketch)
+## 5. API surface (original contract sketch, superseded)
+
+This was the pre-build sketch. The real, built surface, path by path, is
+`docs/api_contract.md`; where the two disagree, that document is authoritative
+and this list is kept only as the original design intent.
 
 - `POST /v1/ask` (SSE stream), `POST /v1/ask/feedback`
 - `GET/POST /v1/plan` (timeline), `POST /v1/plan/react` (internal, event-triggered)
@@ -189,27 +212,48 @@ gain is worth the extra tokens. Make it a per-call flag, never a global setting.
 - `GET /v1/sources/{snapshot_id}` (Truth Ledger, public, no auth)
 - `GET /healthz`, `GET /metrics` (Prometheus)
 
-Auth: email OTP plus JWT (short-lived access, rotating refresh). Rate limits per
-user and per IP via a Redis token bucket.
+Auth: plain email and password plus JWT (short-lived access, rotating
+refresh). Section 3 of `docs/api_contract.md` explains why there is no OTP
+step: a judge has to be inside the product in under fifteen seconds, and any
+flow depending on an inbox fails during judging. Rate limits per user and per
+IP via a Redis token bucket, detailed per route in `docs/api_contract.md`
+section 14.
 
 ## 6. Agent runtime
 
-Agents (see `agents.md`) run as arq jobs triggered by events or cron. The runtime
-loop: build context, call `gemma4:e2b` with tool schemas through Ollama's
-OpenAI-compatible `/v1/chat/completions` with `tools`, execute returned tool
-calls against internal services or MCP servers, iterate to a maximum of 8 steps,
-emit `agent.completed` with a typed result. Every tool call is logged to the
-audit table in `events.db` (input, output hash, latency). Tools are allow-listed
-per agent by the runtime, not by the prompt. No agent has a delete tool.
+Agents (see `agents.md`) are plain async Python functions, one per agent, called
+directly by the service or worker that owns the moment they run: `differ.py`
+calls Porter's classifier on every passage diff, `vault_service.py` calls
+Prohori, Bicharok, Lekhok, and Dalil when a document or case is created,
+`funding_service.py` calls Khoji on a re-match, and `interview_service.py`
+calls Shonchari per turn and at session close. Each call asks `gemma4:e2b` for
+one JSON reply constrained to a schema (Ollama's structured-output mode, the
+`format` field), not native tool calling and not a multi-step loop: a shared
+helper (`app/agents/runtime.py`) validates the reply against the schema and
+retries once, with the validation error fed back, if it fails to validate.
+
+`events.db` already has the tables this section originally described
+(`agent_runs`, with `steps_used`/`max_steps` columns, and `agent_tool_calls`,
+the intended per-tool-call audit trail), and `Settings.agent_max_steps`
+defaults to 8. None of it is wired up yet: nothing in this codebase inserts a
+row into either table, so a per-agent step cap and a tool-call audit trail
+are still schema, not behaviour. `GET /mod/health`'s `queue_depth_agent`
+number reads `agent_runs` and will report zero until that changes. Building
+the loop that actually calls tools, iterates, and writes those rows is
+tracked future work (`docs/paper/digonto.tex`, Conclusion), not a current
+capability. What is current: no agent has a delete tool, and three MCP
+servers (`app/mcp/`) expose the same repositories and services as callable
+tools for any external MCP client, independently of how the seven agents
+above are implemented.
 
 Validation failures on structured output get one retry with the schema error fed
 back. A second failure escalates per section 9.
 
 ## 7. Security and privacy
 
-- Vault files encrypted at rest (AES-256-GCM, per-user data key wrapped by a
-  master key held in an `age` keyfile outside the web root). TLS 1.3 everywhere.
-  Signed URLs for uploads, 15-minute expiry.
+- Vault files encrypted at rest (AES-256-GCM, per-file data key wrapped by a
+  master key derived from the `VAULT_MASTER_KEY` secret, `app/security/vault_crypto.py`).
+  TLS 1.2/1.3 via nginx. Signed URLs for downloads, 15-minute expiry.
 - The SQLite files sit on the same encrypted volume, and Litestream replicas are
   encrypted before leaving the VM. A stolen backup must be useless.
 - Inference is local to the VM: passports and bank statements are never sent to
@@ -273,16 +317,23 @@ requirements, so a student cannot tell the difference in correctness terms.
 
 ## 10. Deployment
 
-Docker Compose services: `caddy`, `api`, `worker-crawl`, `worker-agents`,
-`worker-learn`, `ollama`, `qdrant`, `redis`, `litestream`. Dropping PostgreSQL
-and MinIO removes two containers and their memory reservations, which leaves more
-RAM for the model. One `docker compose up -d` on the VM behind
-`digonto.ahbab.dev` DNS.
+`docker-compose.prod.yml` builds one image (`backend/Dockerfile`) for two
+services: `api` (the default command, `uvicorn`) and `worker` (the same image,
+command overridden to `python -m app.workers.main`), so the crawl schedule, the
+diff and embed consumers, the agent calls, and the learning job all run in that
+one worker process rather than three or four separate ones. Alongside them:
+`ollama`, `redis`, `qdrant`, and `backup` (the `litestream/litestream` image,
+streaming the SQLite files; a no-op if no destination is configured in
+`backend/litestream.yml`). nginx and certbot run on the host, installed and
+configured by `run_onVM.py`, not as compose services; every container publishes
+to `127.0.0.1` only; dropping PostgreSQL and MinIO removes two containers and
+their memory reservations, which leaves more RAM for the model. One
+`docker compose up -d` on the VM behind `digonto.ahbab.dev` DNS.
 
-Volumes: `./data/db` (SQLite files), `./data/vault` (encrypted documents),
-`./data/snapshots` (archived pages), `./data/qdrant`. Litestream replicates
-`./data/db` continuously; a nightly job copies the vault and snapshot volumes
-off-VM. Prometheus and Grafana are an optional profile for judging demos.
+Volumes: the `appdata` named volume (SQLite files under `/data/db`, encrypted
+vault documents under `/data/vault`, archived pages under `/data/snapshots`),
+plus named volumes for `ollama`, `redis`, and `qdrant`. Litestream replicates
+the SQLite files continuously through the `backup` service.
 
 Pull the model explicitly on first boot and verify it:
 `ollama pull gemma4:e2b && ollama show gemma4:e2b` should report `tools` in the

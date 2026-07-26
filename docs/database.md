@@ -205,7 +205,7 @@ CREATE TABLE profiles (
 );
 
 CREATE TABLE countries (
-  code         TEXT PRIMARY KEY,          -- ISO-3166-1 alpha-2
+  code         TEXT PRIMARY KEY,          -- lowercased ISO-3166-1 alpha-2, e.g. 'uk' not 'gb'; see migration 011
   name_en      TEXT NOT NULL,
   name_bn      TEXT NOT NULL,
   visa_types   TEXT NOT NULL CHECK (json_valid(visa_types)),
@@ -248,8 +248,13 @@ CREATE INDEX idx_programmes_inst ON programmes(institution_id);
 CREATE INDEX idx_programmes_deadline ON programmes(deadline_at);
 
 -- A student's shortlist. Drives Porter, the planner, and Khoji.
+-- public_id was added by migration 012 (below): this table was originally
+-- built without one, unlike every sibling table, and every read through
+-- app/repositories/target_repo.py already selected and inserted public_id
+-- before there was a column for it to live in.
 CREATE TABLE student_targets (
   id           INTEGER PRIMARY KEY,
+  public_id    TEXT UNIQUE,             -- added by migration 012; see section 6
   user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   programme_id INTEGER NOT NULL REFERENCES programmes(id) ON DELETE CASCADE,
   visa_type    TEXT,
@@ -919,6 +924,11 @@ CREATE TABLE dead_letters (
   resolved_at TEXT
 );
 
+-- Schema for an audited, multi-step tool-calling runtime (one row per agent
+-- invocation, steps_used capped by max_steps). Not populated yet: the seven
+-- agents each make one schema-constrained model call today, called directly
+-- by the owning service or worker, not dispatched through a tracked run.
+-- docs/api_contract.md section 16 has the detail.
 CREATE TABLE agent_runs (
   id            INTEGER PRIMARY KEY,
   public_id     TEXT NOT NULL UNIQUE,
@@ -941,7 +951,8 @@ CREATE TABLE agent_runs (
 CREATE INDEX idx_runs_agent ON agent_runs(agent, started_at DESC);
 CREATE INDEX idx_runs_user ON agent_runs(user_id, started_at DESC);
 
--- Every tool call, always. This is the agent audit trail.
+-- Schema for a per-tool-call audit trail. Not populated yet, for the same
+-- reason as agent_runs above: no code path writes a row here.
 CREATE TABLE agent_tool_calls (
   id          INTEGER PRIMARY KEY,
   run_id      INTEGER NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
@@ -957,7 +968,10 @@ CREATE TABLE agent_tool_calls (
   UNIQUE (run_id, ordinal)
 );
 
--- Request-level metrics, for the latency numbers the paper will report.
+-- Request-level metrics, for the production latency numbers the paper will
+-- report. Schema only today: request handling records these in Prometheus
+-- (GET /metrics, in-memory) but nothing yet inserts a row here, so
+-- GET /mod/health's latency percentiles read null until that is wired up.
 CREATE TABLE request_metrics (
   id            INTEGER PRIMARY KEY,
   route         TEXT NOT NULL,
@@ -1059,13 +1073,23 @@ framework: the schema is small enough that generated migrations would add more
 risk than they remove.
 
 ```
-backend/migrations/
+backend/app/db/migrations/
   app/001_identity.sql  002_profile.sql  003_knowledge.sql  004_qa.sql
       005_plans.sql     006_vault.sql    007_funding.sql    008_interview.sql
       009_new_agents.sql 010_notifications.sql  011_seed_countries.sql
+      012_student_targets_public_id.sql
   events/001_events.sql 002_agents.sql   003_metrics.sql
   learn/001_replay.sql  002_adapters.sql 003_benchmark.sql
 ```
+
+Migration 012 is the one addition after the original eleven: it adds the
+`student_targets.public_id` column described in section 3.2, found by running
+the target endpoints end to end and hitting "no such column: st.public_id"
+on every read, since `app/repositories/target_repo.py` had always selected
+and inserted a `public_id` that had no column to live in. No backfill
+statement is needed, because schema migrations run before any request (including
+the demo-account seed) can insert a `student_targets` row, so the table is
+always empty at the point this migration runs.
 
 ```sql
 CREATE TABLE schema_migrations (
@@ -1083,15 +1107,20 @@ where SQLite allows it (`IF NOT EXISTS`).
 
 ## 7. Retention and deletion
 
+All four rows below run nightly (`app/workers/retention.py`, scheduled at
+03:17 UTC by `app/workers/main.py`), not on separate schedules. There is no
+`otp_codes` table: this system has no OTP step (section 3.1's own note, and
+`docs/api_contract.md` section 3), so that row from the original design is
+removed here rather than left describing a table that does not exist.
+
 | Data | Retention | Mechanism |
 | --- | --- | --- |
 | Snapshots and passages | 90 days for files, rows kept indefinitely | nightly job sets `retired_at`, deletes the file, keeps the row so old citations still resolve to a verifiable record |
-| OTP codes | 24 hours | nightly purge |
 | Refresh tokens | 30 days past expiry | nightly purge |
-| Events | 180 days | monthly archive to compressed file, then delete |
-| Request metrics | 90 days | nightly purge |
+| Events | 180 days | nightly job archives to a compressed file in batches, then deletes the archived rows |
+| Request metrics | 90 days | nightly purge, once rows exist; nothing in this codebase currently inserts into `request_metrics`, so this table is empty in practice today (`docs/api_contract.md` section 16) |
 | Vault documents | until the user deletes | hard delete cascades to the file and shreds the wrapped key |
-| Replay samples | until consent is withdrawn | withdrawal deletes rows and flags affected adapters |
+| Replay samples | until the user deletes their account | full account deletion (`AuthService.delete_account`) removes a user's replay samples. Withdrawing the `improve_model` consent alone does not: no repository exposes that as a standalone operation yet (`docs/api_contract.md` section 16 has the detail) |
 
 **Hard delete of a user** runs in one transaction per database, in this order:
 delete vault files from the volume, delete `app.db` rows (cascades handle the

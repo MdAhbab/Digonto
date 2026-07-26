@@ -78,7 +78,7 @@ DOIs are in [`docs/paper/references.bib`](docs/paper/references.bib).
 |---|---|
 | **52,799** | Bangladeshi students studying abroad in 2023, across 55 countries. Roughly three times the number fifteen years earlier. |
 | **$667.77M** | Left the country for overseas education in FY25 alone, through 109,290 banking transactions. A record for a single year. |
-| **~2,000 / ~400** | Consultancy firms operating in Bangladesh, versus those registered with the sector association. The rest run on a general trade licence with no specialised supervision. |
+| **Hundreds** | Consultancy firms operating in Bangladesh, with no mandatory registration system for this specific sector. Most run on a general trade licence with no specialised supervision. |
 | **54.90%** | Schengen visa refusal rate for Bangladeshi applicants in 2024: 20,957 refusals out of 39,345 applications, up from 42.8% in 2023. Every refusal also costs a non-refundable fee. |
 | **~65%** | Of applications from India and Bangladesh to one United States university found likely fraudulent, much of it traced to agents. |
 

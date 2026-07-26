@@ -31,7 +31,20 @@ class ProfileRepo:
 
     async def get(self, user_id: int) -> dict[str, Any] | None:
         row = await self._db.fetch_one("SELECT * FROM profiles WHERE user_id = ?", (user_id,))
-        return dict(row) if row else None
+        if row is None:
+            return None
+        out = dict(row)
+        # `upsert` below stores english_sub as a JSON string, because SQLite
+        # has no object column. Decoding here keeps the two sides symmetric;
+        # without it ProfileOut.english_sub receives a str and every GET
+        # /me/profile fails validation.
+        sub = out.get("english_sub")
+        if isinstance(sub, str) and sub:
+            try:
+                out["english_sub"] = json.loads(sub)
+            except json.JSONDecodeError:
+                out["english_sub"] = None
+        return out
 
     async def upsert(self, user_id: int, fields: dict[str, Any]) -> dict[str, Any]:
         existing = await self.get(user_id)

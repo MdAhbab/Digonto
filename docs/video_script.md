@@ -34,8 +34,8 @@ narration for the first three seconds, just the sound of pages.
 > and fifty-seven refusals. Every one of them cost a fee that is never returned."
 
 On screen, the four verified numbers appear as plain typeset figures, one at a
-time: 52,799 students abroad. 667.77 million dollars in FY25. 2,000 consultancies,
-400 registered. 54.9 percent refused.
+time: 52,799 students abroad. 667.77 million dollars in FY25. Hundreds of
+consultancies, no mandatory registration system. 54.9 percent refused.
 
 > "The information that prevents most of those refusals is already public. It is
 > just written in English no one explains, spread across portals that change

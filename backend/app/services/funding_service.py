@@ -1,14 +1,15 @@
 """Funding Studio and Khoji. api_contract.md section 9.
 
-`POST /funding/rematch` re-runs Khoji's eligibility scoring, which does not
-exist in this codebase yet; this service calls
-`app.agents.khoji.score_eligibility` and lets that import stay unresolved
-rather than fabricate a score or a reason string. Every other read here
+`POST /funding/rematch` re-runs Khoji's eligibility scoring through
+`app.agents.khoji.score_eligibility`, which scores each award against the
+student's profile and returns a reason per criterion. Every other read here
 (the budget, the fee check) is real arithmetic over `budgets`, `fx_rates`,
 and `solvency_rules`, none of which needs a model call.
 """
 
 from __future__ import annotations
+
+import logging
 
 from app.agents.khoji import score_eligibility
 from app.errors import NotFound
@@ -18,6 +19,8 @@ from app.repositories.budget_repo import BudgetRepo
 from app.repositories.profile_repo import ProfileRepo
 from app.repositories.scholarship_repo import ScholarshipRepo
 from app.repositories.target_repo import TargetRepo
+
+log = logging.getLogger(__name__)
 
 _SOURCE_LABELS_EN = {"own_funds": "Family / personal savings", "awards": "Scholarship awards"}
 _SOURCE_LABELS_BN = {"own_funds": "পরিবার / ব্যক্তিগত সঞ্চয়", "awards": "বৃত্তির অর্থ"}
@@ -105,14 +108,30 @@ class FundingService:
 
         results = await score_eligibility(profile=profile, scholarships=scored, router=self._router)
 
+        # Khoji identifies an award by its public ULID, never by the internal
+        # row id, because the model must not be handed database primary keys.
+        # funding_matches.scholarship_id is a foreign key onto that internal
+        # id, so the two have to be mapped back here. Without this the insert
+        # fails the foreign key constraint on every single rematch.
+        by_public_id = {sc["public_id"]: sc["id"] for sc in scholarships}
+
         await self._scholarships.clear_matches_for_user(user_id)
         out = []
         for rank, result in enumerate(
             sorted(results, key=lambda r: r["score"], reverse=True), start=1
         ):
+            internal_id = by_public_id.get(result["scholarship_id"])
+            if internal_id is None:
+                # The model named an award that was not in the list it was
+                # given. Skip it rather than write a dangling match.
+                log.warning(
+                    "rematch: khoji returned unknown scholarship id=%s, skipping",
+                    result["scholarship_id"],
+                )
+                continue
             match = await self._scholarships.create_match(
                 user_id=user_id,
-                scholarship_id=result["scholarship_id"],
+                scholarship_id=internal_id,
                 score=result["score"],
                 rank=rank,
                 eligible=result["eligible"],

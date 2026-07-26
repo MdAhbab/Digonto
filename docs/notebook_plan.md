@@ -89,10 +89,14 @@ Then run three cases and print the raw structured output for each:
 
 ### 6. Tool calling
 
-Demonstrate native function calling against two small local tools, using the same
-schemas the agents use in production. A single Porter-style call is enough:
-classify a supplied portal diff into one of five enumerated change types, and show
-that a wording-only edit is classified as cosmetic and discarded. Print the raw
+Demonstrate the model's native function-calling capability against two small
+local tools. This is a capability check, not a reproduction of an agent: in
+production, Porter's own classification call asks for schema-constrained JSON
+output rather than a native tool call, so show the two side by side rather
+than presenting native tool calling as what Porter does today. A single
+classification call is enough: classify a supplied portal diff into one of
+five enumerated change types, and show that a wording-only edit is classified
+as cosmetic and discarded. Print the raw
 tool-call payload the model emitted, not just the parsed result.
 
 ### 7. Evaluation

@@ -8,7 +8,7 @@ pressing Submit, not on the last day.
 
 | Rule | Our answer |
 | --- | --- |
-| Does not use Gemma as a core component | Gemma 4 E2B is the only generation model. It answers, classifies portal changes, scores eligibility and interview answers, extracts document fields with native vision, and drives all four agents with native tool calling. |
+| Does not use Gemma as a core component | Gemma 4 E2B is the only generation model. It answers, classifies portal changes, scores eligibility and interview answers, extracts document fields with native vision, and drives all seven agents through schema-constrained structured output. Its native tool-calling capability is verified separately and backs three reusable MCP servers. |
 | An unmodified chatbot wrapper with no automation or insight layer | The conversational surface is one page of seven. The system crawls and diffs portals on a schedule, versions a knowledge store, re-plans student timelines from events, and improves the model from real corrections. |
 | Missing any of the five components | Tracked in the table below. |
 
@@ -16,7 +16,7 @@ pressing Submit, not on the last day.
 
 | # | Component | Where it lives | Status |
 | --- | --- | --- | --- |
-| 1 | Kaggle writeup | `paper/kaggle_writeup.md` | Written. 1,780 words against a 2,000 cap; 11 graphics listed against a 10 minimum. |
+| 1 | Kaggle writeup | `paper/kaggle_writeup.md` | Written. 1,946 words against a 2,000 cap; 11 graphics listed against a 10 minimum. |
 | 2 | Media gallery | Graphics list at the end of the writeup | Planned, 11 items. Needs the app built and captured. |
 | 3 | Public notebook | `docs/notebook_plan.md`, then `notebooks/digonto_gemma.ipynb` | Planned in full. Needs writing and a clean run. |
 | 4 | Video, 3 to 5 minutes | `docs/video_script.md` | Scripted shot by shot at 4:30. Needs recording. |
@@ -24,7 +24,7 @@ pressing Submit, not on the last day.
 
 Two required elements are pass or fail and are easy to lose by accident:
 
-- **Writeup under 2,000 words.** Currently 1,780. Re-count after every edit; do
+- **Writeup under 2,000 words.** Currently 1,946. Re-count after every edit; do
   not count the graphics list into the prose if you trim, but do check both
   numbers.
 - **Video under 5 minutes.** Script targets 4:30. Confirm on the exported file.
