@@ -60,7 +60,7 @@ test walks every table in the database that has a column referring to a user and
 if any row still points at the deleted account, so a table added in future is covered
 without anyone remembering to update the test.
 
-**What survives, and why.** Two things, and they are both listed here because a
+**What survives, and why.** Three things, and they are all listed here because a
 deletion promise with unlisted exceptions is not a promise.
 
 1. **Event records, with your user id removed.** The event log is what makes the rest
@@ -77,6 +77,17 @@ deletion promise with unlisted exceptions is not a promise.
    in it can be traced back to you, which is why erasing it would remove nothing about
    you.
 
+3. **A record that the address was used.** One row holding your account id, the date,
+   and a keyed digest of your email address. The address itself is not kept: the digest
+   is an HMAC-SHA256 under a server-held key, which can answer "has this address held an
+   account" and cannot be turned back into the address. Your name is not kept either.
+
+   It exists to stop one address opening account after account, and to stop somebody else
+   claiming an address you have given up and presenting as you to anyone who knew it. The
+   consequence for you is concrete and worth stating plainly: **once your account is
+   erased, that email address cannot be used to sign up again.** If you may want to come
+   back, keep the account rather than deleting it, or use the export first.
+
 Feedback you sent through the form is kept, with your account link and any email
 address you gave both removed. A report that a page is broken is about the product
 rather than about you, and a maintainer may still be working from it.
@@ -86,8 +97,17 @@ rather than about you, and a maintainer may still be working from it.
 We do not sell data, share it with consultancies, or use it for advertising. There is
 no advertising on the service.
 
-We do not build a per-student profile for business or research purposes. The nightly
-report described above is counts only. If that ever changes, it would require a
+We keep a nightly per-account activity report, and it is counts only: how many
+questions you asked, how many were refused, how far through your plan you are, how many
+documents are flagged, and the country codes you are applying to. It is keyed by your
+account id, because a figure nobody can tie to a record is not evidence of anything, and
+it holds no name, email address, district, age, gender, or anything you typed. It is
+deleted with your account by a foreign key rather than by a routine remembering to, so
+there is no version of this where the reports outlive the account.
+
+We do not build a description of you as a person, or infer where you intend to go and
+store that as a judgement about you. The reports record what the account did, not who it
+belongs to. The nightly aggregate report described above is counts only. If that ever changes, it would require a
 consent setting you can see and switch off, an entry in this document, inclusion in
 `GET /me/export`, and deletion when your account is deleted. Anything less would mean
 this page is not accurate, which is the one outcome that is not acceptable.

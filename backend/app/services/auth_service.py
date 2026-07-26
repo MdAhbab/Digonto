@@ -27,6 +27,7 @@ from app.repositories._util import new_ulid, utc_now_iso
 from app.repositories.user_repo import UserRepo
 from app.security.passwords import check_common_password, hash_password, verify_password
 from app.security.tokens import create_access_token, hash_refresh_token, new_refresh_token
+from app.security.tombstone import email_digest
 
 # A fixed, valid-looking hash to run `verify_password` against when the email
 # does not exist, so a lookup miss costs about the same wall-clock time as a
@@ -101,6 +102,28 @@ class AuthService:
             raise Conflict(
                 detail_en="An account already exists for that email.",
                 detail_bn="এই ইমেইলে ইতিমধ্যে একটি অ্যাকাউন্ট আছে।",
+            )
+        # An address whose account was erased cannot be reused. Two things this prevents:
+        # opening account after account from one address to get around per-account limits,
+        # and somebody else claiming an address a student has given up, which would let
+        # them present as that student to anyone who knew the old address.
+        #
+        # The message names the reason rather than reusing "an account already exists".
+        # A student who deleted their own account and is trying to come back deserves to
+        # be told what happened instead of being told something untrue.
+        tombstone = await self._users.tombstone_for_email(email_digest(email, self._settings))
+        if tombstone is not None:
+            raise Conflict(
+                detail_en=(
+                    "This email address belonged to an account that has been deleted, so "
+                    "it cannot be used to sign up again. Use a different address, or "
+                    "contact a moderator if this was your account."
+                ),
+                detail_bn=(
+                    "এই ইমেইল ঠিকানাটি একটি মুছে ফেলা অ্যাকাউন্টের ছিল, তাই এটি দিয়ে আবার "
+                    "সাইন আপ করা যাবে না। অন্য ঠিকানা ব্যবহার করুন, অথবা এটি আপনার অ্যাকাউন্ট "
+                    "হলে একজন মডারেটরের সঙ্গে যোগাযোগ করুন।"
+                ),
             )
         if len(password) < 8 or check_common_password(password):
             raise Conflict(
@@ -487,6 +510,18 @@ class AuthService:
         await app_db.execute(
             "UPDATE feedback SET user_id = NULL, contact_email = NULL WHERE user_id = ?",
             (user_id,),
+        )
+
+        # Written *before* the row is deleted, because the address is on the row and this
+        # is the last moment it exists. A failure here must not leave the account
+        # half-deleted, so it is ordered immediately before the delete and inside the same
+        # code path: if recording the tombstone raises, nothing has been destroyed yet and
+        # the nightly sweep retries the whole account tomorrow.
+        await self._users.record_tombstone(
+            public_id=row["public_id"],
+            email_hmac=email_digest(row["email"], self._settings),
+            deleted_at=now,
+            reason="moderator" if row.get("status") == "banned" else "self",
         )
 
         await self._users.hard_delete(user_id)

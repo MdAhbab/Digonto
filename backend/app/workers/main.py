@@ -36,7 +36,16 @@ from app.db.migrate import run_migrations
 from app.events.bus import EventBus
 from app.llm.router import ModelRouter
 from app.repositories.portal_repo import PortalRepo
-from app.workers import crawler, differ, discovery, embedder, insights, learner, retention
+from app.workers import (
+    crawler,
+    differ,
+    discovery,
+    embedder,
+    insights,
+    learner,
+    retention,
+    student_reports,
+)
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -195,6 +204,10 @@ class WorkerApp:
 
     async def _run_insights(self) -> None:
         await insights.run_nightly(self.dbs, self.settings)
+        # Same schedule, run straight after: both read the same day's data, and running
+        # them apart would let a purge between the two produce a pair of reports that
+        # disagree about how many accounts exist.
+        await student_reports.run_nightly(self.dbs, self.settings)
 
     async def _run_learning_cycle(self) -> None:
         await learner.run_learning_cycle(self.dbs, self.settings)

@@ -187,6 +187,35 @@ class UserRepo:
             (utc_now_iso(), user_id),
         )
 
+    # -- deleted-account tombstones (023) ----------------------------------
+
+    async def record_tombstone(
+        self, *, public_id: str, email_hmac: str, deleted_at: str, reason: str = "self"
+    ) -> None:
+        """Note that this address held an account. Called as part of the purge.
+
+        `ON CONFLICT` increments `cycle_count` rather than failing, so an address that
+        signs up and deletes repeatedly produces one row with a rising count. That count
+        is the signal the table exists to expose: one cycle is a change of mind, a dozen
+        is the spam pattern.
+        """
+        await self._db.execute(
+            """INSERT INTO deleted_accounts (public_id, email_hmac, deleted_at, reason)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(email_hmac) DO UPDATE SET
+                   cycle_count = cycle_count + 1,
+                   deleted_at  = excluded.deleted_at,
+                   public_id   = excluded.public_id,
+                   reason      = excluded.reason""",
+            (public_id, email_hmac, deleted_at, reason),
+        )
+
+    async def tombstone_for_email(self, email_hmac: str) -> dict[str, Any] | None:
+        row = await self._db.fetch_one(
+            "SELECT * FROM deleted_accounts WHERE email_hmac = ?", (email_hmac,)
+        )
+        return dict(row) if row else None
+
     # -- scheduled deletion (019_account_deletion_window.sql) --------------
 
     async def schedule_deletion(
