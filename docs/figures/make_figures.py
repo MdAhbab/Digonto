@@ -206,13 +206,18 @@ def fig01_problem_scale():
 
     # Panel C: consultancy oversight gap
     axC = fig.add_subplot(gs[1, 0])
-    cats = ["Operating (all)", "Registered with\nsector association"]
-    vals = [2000, 400]
-    colors = [GREY, GREEN]
+    # Schengen decisions from Bangladesh in 2024. Chosen because both numbers are
+    # sourced. The previous version of this panel showed an estimated 2,000
+    # operating consultancies against ~400 registered, but the cited article
+    # states neither figure (see the note on fe_consultancies in references.bib),
+    # so the panel asserted two numbers no source supports.
+    cats = ["Applications", "Refused"]
+    vals = [39345, 20957]
+    colors = [GREY, ORANGE]
     y = np.arange(2)
     axC.barh(y, vals, color=colors, height=0.5, zorder=3)
     for yi, v in zip(y, vals):
-        axC.text(v + 45, yi, f"~{v:,}", va="center", ha="left", fontsize=9, color=TEXT)
+        axC.text(v + 900, yi, f"{v:,}", va="center", ha="left", fontsize=9, color=TEXT)
         # category name labelled directly inside the bar (avoids clipping
         # long y-tick labels off the left edge of the panel)
     axC.text(40, 0, cats[0], va="center", ha="left", fontsize=9, color="white")
@@ -220,18 +225,18 @@ def fig01_problem_scale():
               linespacing=1.3)
     axC.set_yticks([])
     axC.invert_yaxis()
-    axC.set_xlim(0, 2500)
+    axC.set_xlim(0, 47000)
     axC.set_xticks([])
     for s in ("top", "right", "bottom", "left"):
         axC.spines[s].set_visible(False)
     axC.tick_params(left=False)
-    axC.set_title("Consultancy firms, Bangladesh", fontsize=9.5, color=TEXT, pad=6)
+    axC.set_title("Schengen decisions from Bangladesh, 2024", fontsize=9.5, color=TEXT, pad=6)
 
     # Panel D: Schengen refusal rate, 2023 vs 2024
     axD = fig.add_subplot(gs[1, 1])
     years = ["2023", "2024"]
-    rate_vals = [42.8, 54.90]
-    rate_labels = ["42.8%", "54.90%"]
+    rate_vals = [43.3, 54.9]
+    rate_labels = ["43.3%", "54.9%"]
     xpos = np.arange(2)
     axD.bar(xpos, rate_vals, color=ORANGE, width=0.5, zorder=3)
     for xi, v, rl in zip(xpos, rate_vals, rate_labels):
@@ -252,11 +257,11 @@ def fig01_problem_scale():
         "52,799 Bangladeshi students studied abroad in 2023, across 55 "
         "countries. Top right: families paid 667.77 million US dollars for "
         "overseas education in FY25, a record for a single year, across "
-        "109,290 banking transactions. Bottom left: an estimated 2,000 "
-        "consultancy firms operate in Bangladesh, of which only about 400 are "
+        "109,290 banking transactions. Bottom left: Schengen applications from "
+        "Bangladesh in 2024 and how many were refused, both as compiled by "
         "registered with the sector association; the rest hold no specialised "
         "supervision. Bottom right: the Schengen visa refusal rate for "
-        "Bangladeshi applicants rose from 42.8 percent in 2023 to 54.90 "
+        "Bangladeshi applicants rose from 43.3 percent in 2023 to 54.9 "
         "percent in 2024. MEASURED: every number is transcribed unchanged from "
         "README.md, which cites the original sources (UNESCO, Bangladesh Bank, "
         "the consultancy sector association, and Schengen visa statistics); "
@@ -286,7 +291,7 @@ def fig02_refusal_trend():
     for xi, v in zip(x + w / 2, refused):
         ax.text(xi, v + 1000, f"{v:,}", ha="center", va="bottom", fontsize=9, color=TEXT)
 
-    rate_labels = ["refusal rate\n42.8%", "refusal rate\n54.90%"]
+    rate_labels = ["refusal rate\n43.3%", "refusal rate\n54.9%"]
     for xi, rl in zip(x, rate_labels):
         ax.text(xi, 46500, rl, ha="center", va="bottom", fontsize=9, weight="bold", color=TEXT)
 
@@ -305,7 +310,7 @@ def fig02_refusal_trend():
         "year. 2023: 41,317 applications, 17,015 refused. 2024: 39,345 "
         "applications, 20,957 refused. MEASURED, from README.md's cited "
         "Schengen visa statistics. Note: the refusal rate is quoted exactly "
-        "as officially reported (42.8 percent, 54.90 percent); dividing the "
+        "as officially reported by the European Commission (43.3 percent, 54.9 percent); dividing the "
         "refused count shown here by the application count shown here gives "
         "a slightly lower figure (about 41 percent and 53 percent), most "
         "likely because the official rate uses a different denominator or "
@@ -551,22 +556,25 @@ def fig07_agent_map():
     ratio = axes_aspect(fig, ax)
 
     agents = ["Porter", "Prohori", "Khoji", "Shonchari", "Bicharok", "Lekhok", "Dalil"]
-    cols = ["Tools", "Vision", "Audio", "Thinking"]
-    col_colors = [BLUE, ORANGE, GREEN, GREY]
+    cols = ["Schema", "Vision", "Thinking"]
+    col_colors = [BLUE, ORANGE, GREY]
+    # Every agent issues one schema-constrained request; none uses the model's
+    # native tool-calling capability, and none uses audio, because no
+    # speech-to-text service is deployed. Both were previously marked present.
     matrix = [
-        [1, 0, 0, 0],  # Porter: tool calling only, thinking off (change triage)
-        [1, 1, 0, 0],  # Prohori: extract_fields is a native vision pass
-        [1, 0, 0, 1],  # Khoji: eligibility scoring runs with thinking on
-        [1, 0, 1, 1],  # Shonchari: voice mode (audio) + answer scoring thinking on
-        [1, 1, 0, 0],  # Bicharok: reads the refusal letter with vision
-        [1, 0, 0, 0],  # Lekhok: tool calling only
-        [1, 1, 0, 0],  # Dalil: extract_fields vision pass over the contract
+        [1, 0, 0],  # Porter: change triage, thinking off (latency, not quality)
+        [1, 1, 0],  # Prohori: extract_fields is a native vision pass
+        [1, 0, 1],  # Khoji: eligibility scoring runs with thinking on
+        [1, 0, 1],  # Shonchari: answer scoring runs with thinking on
+        [1, 1, 0],  # Bicharok: reads the refusal letter with vision
+        [1, 0, 0],  # Lekhok: text only, against document metadata
+        [1, 1, 0],  # Dalil: vision pass over the contract
     ]
 
     top, bottom = 0.88, 0.04
     n_rows = len(agents) + 1
     row_h = (top - bottom) / n_rows
-    col_centers = [0.475, 0.620, 0.765, 0.910]
+    col_centers = [0.520, 0.680, 0.840]
     sq_h = row_h * 0.60
     sq_w = sq_h * ratio
 
@@ -599,7 +607,8 @@ def fig07_agent_map():
         "cell means it is not. All seven agents use tool calling. Vision is "
         "used by Prohori, Bicharok, and Dalil, exactly where agents.md "
         "specifies an extract_fields call (a Gemma vision pass over an "
-        "uploaded document). Audio is used by Shonchari's voice mode. "
+        "uploaded document). No agent uses native tool calling, and none uses "
+        "audio, because no speech-to-text service is deployed. "
         "Thinking mode is shown on only where agents.md states it explicitly, "
         "Khoji's eligibility scoring and Shonchari's answer scoring; it is "
         "off by the same source's stated default everywhere else (Porter's "

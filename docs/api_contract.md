@@ -207,12 +207,24 @@ so tokens must stream rather than arrive in one block.
 | `citation` | `{ordinal, snapshot_id, portal, captured, quoted}` | emitted when a `‖n‖` marker is produced |
 | `alt` | `{"lang":"en","text":"..."}` | the mirror-language answer, sent after the primary completes |
 | `refusal` | `{reason_en, reason_bn, watching_portal_ids}` | terminal; no `token` events follow |
-| `done` | `{latency_ms, first_token_ms, confidence, tokens}` | terminal |
+| `incomplete` | `{reason_en, reason_bn}` | generation was cut off *after* tokens were shown; the text stands, no citations follow |
+| `done` | `{latency_ms, first_token_ms, confidence, tokens, incomplete}` | terminal |
 | `error` | problem-details object | terminal |
 
 The `refusal` event is a first-class terminal state, not an error. `Ask.tsx`
 already renders a designed refusal card; this event drives it. `watching_portal_ids`
 is what lets the UI honestly say "we are watching this source for an answer".
+
+`incomplete` exists because the two failure shapes are not the same and must not
+be rendered the same. If generation stops before any token is emitted, there is no
+answer and `refusal` is correct. If it stops *after* the reader has already watched
+a complete-looking answer arrive — which happens when the token ceiling is hit
+mid-JSON, and Bangla reaches it sooner than English for the same content — then
+replacing that text with "nothing is shown" contradicts what is on screen and
+discards a real answer. The text is kept and no citations are emitted, because none
+can be trusted from a truncated object. The client must label it: an uncited answer
+claims no sources and must not be presented with the authority of a cited one. It
+is deliberately not written to the semantic cache.
 
 **GET `/ask/history?conversation_id=&cursor=`** returns past exchanges shaped
 exactly like the frontend `QA` interface:

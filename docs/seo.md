@@ -67,6 +67,29 @@ is the best available approximation given the current routing:
   at the same URL (`https://digonto.ahbab.dev/`).
 - `sitemap.xml` repeats the same pattern for all 5 indexable routes.
 
+**The sitemap is generated, not hand-written.** `frontend/scripts/generate-sitemap.mjs`
+runs as the first step of `npm run build` and derives the URL set from
+`SEO_ROUTES.noindex` in `src/app/lib/seo.tsx`. It was previously a hand-maintained
+file, which made it a second source of truth for "which routes are public": adding
+a public route meant remembering to edit two files, and the two disagreeing shows
+up either as a live page that never gets indexed or as an auth-gated page
+advertised to crawlers. `lastmod` was also a literal date that went stale the day
+after it was written.
+
+The generator fails the build rather than guessing when the two drift — a route
+that becomes indexable without a declared `changefreq`/`priority` stops the build
+with the route named, because those are SEO decisions that should be made
+deliberately rather than defaulted into.
+
+**It is still a static file, and that remains correct.** A dynamic sitemap earns
+its keep only when there are URLs that cannot be enumerated at build time. There
+are none here: `/ledger` is a search form, not a `/ledger/:snapshot_id` route, so
+individual snapshots have no addressable URL to list. If snapshot permalinks are
+ever added — which would be worth doing, since "show a bank officer where this
+requirement came from" is better served by a shareable link — that is the point at
+which this should become a backend-generated endpoint, and section 3's option (2)
+becomes the relevant discussion.
+
 **Be honest about what this buys you:** self-referencing hreflang to the
 same URL for two different `hreflang` values is a known, debated pattern.
 It correctly tells Google "this URL is a reasonable result for both bn and

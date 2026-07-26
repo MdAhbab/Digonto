@@ -1077,10 +1077,43 @@ backend/app/db/migrations/
   app/001_identity.sql  002_profile.sql  003_knowledge.sql  004_qa.sql
       005_plans.sql     006_vault.sql    007_funding.sql    008_interview.sql
       009_new_agents.sql 010_notifications.sql  011_seed_countries.sql
-      012_student_targets_public_id.sql
+      012_student_targets_public_id.sql   013_document_extraction.sql
+      014_country_geography.sql           015_portal_registry.sql
+      016_portal_discovery.sql            017_portal_registry_corrections.sql
   events/001_events.sql 002_agents.sql   003_metrics.sql
   learn/001_replay.sql  002_adapters.sql 003_benchmark.sql
 ```
+
+**015 to 017 are the watched-portal registry**, and they are worth reading
+together because they change what kind of data `portals` holds.
+
+`015_portal_registry.sql` seeds 31 official sources — embassies, immigration
+ministries, scholarship bodies, Bangladesh Bank, UGC, IELTS and TOEFL — across the
+eight destination countries, plus six with a NULL `country_code` that apply to
+every destination (an outward-remittance rule or an IELTS band is not
+country-specific). This is a migration and not seed data on purpose: `portals` was
+previously populated only by `app/db/seed_demo.py`, which does not run when
+`APP_ENV=production`, so a production deployment watched zero portals and every
+stage of the recurrent loop downstream of the crawler had no input at all.
+
+`016_portal_discovery.sql` adds `discovered_from_portal_id` and `discovered_at`, so
+the registry can grow itself. The crawler follows a bounded set of same-site links
+from each registry root and registers each as its own portal row rather than
+folding it into the parent — necessary because `snapshots` carries no URL column,
+so a snapshot's URL *is* its portal's URL, and folding a child's snapshot under the
+parent would point every citation to it at the wrong page. `discovered_at IS NULL`
+is the test for "curated root, may be expanded", which caps crawl depth at one
+level without needing a counter and also correctly excludes portals found by
+search, which have no parent row.
+
+`017_portal_registry_corrections.sql` records what checking all 31 URLs against
+the live web found: 25 returned 200, one had moved (deleted, since the reachable
+parent plus link expansion covers it), three sit behind a WAF that returns 403 to
+any non-browser client while their robots.txt permits crawling (disabled, with a
+reachable alternative retained for each affected country), and two were unreachable
+from the development network but left enabled, because inferring a dead source from
+one vantage point would be wrong and `consecutive_failures` already exists to
+surface it properly.
 
 Migration 012 is the one addition after the original eleven: it adds the
 `student_targets.public_id` column described in section 3.2, found by running
