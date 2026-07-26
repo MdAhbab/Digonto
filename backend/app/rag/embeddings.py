@@ -26,6 +26,24 @@ log = logging.getLogger(__name__)
 # collection has to be created with a matching size before anything is written.
 EMBED_DIM = 1024
 
+# Ceiling on a single query embedding, which is the first thing every question does.
+#
+# It has to be much shorter than the generation timeout, and the reason is the sentence
+# above this module's docstring. Ollama serves one model runner at a time on a machine this
+# size, and the generation model holds it for OLLAMA_KEEP_ALIVE. An embedding request that
+# arrives while that model is resident waits for a slot that will not free for the whole
+# keep-alive period, so it does not fail: it hangs.
+#
+# Observed on the deployment VM: every question sat for 180 seconds, the read timeout of the
+# shared HTTP client, and only then fell back to keyword retrieval and answered. The
+# fallback worked and was invisible, because the failure was slow rather than loud.
+#
+# Twenty five seconds covers a cold bge-m3 load on CPU, which is a few seconds, with room to
+# spare. Past that the vector index is not going to answer this question in time, and
+# keyword retrieval over the same archived sources is a far better outcome for the student
+# than three more minutes of waiting.
+QUERY_EMBED_TIMEOUT_SECONDS = 25.0
+
 
 def text_key(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -72,6 +90,11 @@ class Embedder:
             pass
 
     async def embed_one(self, text: str) -> list[float]:
+        """Embed one query. This is on the interactive path, so it is bounded tightly.
+
+        See QUERY_EMBED_TIMEOUT_SECONDS: a stuck embedding must degrade to keyword
+        retrieval quickly rather than hold the answer open for the client's read timeout.
+        """
         key = text_key(text)
         hit = await self._cached(key)
         if hit is not None:
@@ -80,6 +103,7 @@ class Embedder:
         r = await self._client.post(
             f"{self._s.ollama_base_url}/api/embed",
             json={"model": self._s.embed_model, "input": text, "keep_alive": self._s.ollama_keep_alive},
+            timeout=QUERY_EMBED_TIMEOUT_SECONDS,
         )
         r.raise_for_status()
         data = r.json()
