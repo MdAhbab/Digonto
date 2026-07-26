@@ -1,8 +1,13 @@
+import { Suspense, lazy } from "react";
 import { Link } from "react-router";
 import { ArrowRight, FileSearch, ShieldCheck, BookOpenText, Radar, Quote, HandCoins, Languages } from "lucide-react";
 import { useI18n } from "../lib/i18n";
 import { useTheme } from "../lib/theme";
-import { EarthScene } from "../components/EarthScene";
+import { StaticHorizon } from "../components/StaticHorizon";
+
+const EarthScene = lazy(() =>
+  import("../components/EarthScene").then((m) => ({ default: m.EarthScene })),
+);
 import { Section, Reveal, Counter, CitationStamp, motion } from "../components/primitives";
 import { useEffect, useState, useRef } from "react";
 import { useInView, useScroll, useTransform } from "motion/react";
@@ -42,9 +47,18 @@ export function Landing() {
   return (
     <div className="relative">
       <Seo title={meta.title[lang]} description={meta.description[lang]} path={meta.path} noindex={meta.noindex} lang={lang} />
-      {/* Fixed Three.js Earth behind the hero; content below scrolls over it */}
+      {/* Fixed Three.js Earth behind the hero; content below scrolls over it.
+
+          Lazily loaded, with the SVG horizon as the fallback. Three.js is ~128 KB
+          gzip, and holding first paint of the headline for it would put this
+          route over the brief's 300 KB budget for no benefit: the hero is
+          decorative, so the copy should render first and the scene should arrive
+          behind it. The fallback is the same one low-power devices keep, so the
+          swap is between two composed states rather than from an empty box. */}
       <div className="pointer-events-none fixed inset-0 z-0">
-        <EarthScene theme={theme} />
+        <Suspense fallback={<StaticHorizon theme={theme} />}>
+          <EarthScene theme={theme} />
+        </Suspense>
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-background/40 via-transparent to-background" />
       </div>
 

@@ -161,9 +161,42 @@ export function Globe({ theme, targets }: { theme: "light" | "dark"; targets: Gl
       if (!reduce) { rot += 0.12; raf = requestAnimationFrame(draw); }
     }
 
+    // `draw` re-schedules itself, so it must never be used as an event handler:
+    // every resize event would have started an additional animation loop
+    // alongside the running one, and because each overwrote `raf` only the newest
+    // was ever cancellable. A phone showing and hiding its address bar fires
+    // resize repeatedly, so a few seconds of scrolling left several full globe
+    // renders per frame competing for the main thread. The handler now cancels
+    // the in-flight frame before starting one.
+    const onResize = () => {
+      cancelAnimationFrame(raf);
+      raf = 0;
+      draw();
+    };
+
+    // Pause entirely while off screen or backgrounded. This canvas sits on the
+    // destination chooser, which is a long page: without this it kept drawing
+    // arcs at 60 fps under content the reader had already scrolled past.
+    let onScreen = true;
+    const stop = () => { cancelAnimationFrame(raf); raf = 0; };
+    const start = () => { if (!raf && onScreen && !document.hidden && !reduce) draw(); };
+
+    const io = new IntersectionObserver(
+      ([entry]) => { onScreen = entry.isIntersecting; onScreen ? start() : stop(); },
+      { threshold: 0 },
+    );
+    io.observe(canvas);
+    const onVisibility = () => (document.hidden ? stop() : start());
+    document.addEventListener("visibilitychange", onVisibility);
+
     draw();
-    window.addEventListener("resize", draw);
-    return () => { cancelAnimationFrame(raf); window.removeEventListener("resize", draw); };
+    window.addEventListener("resize", onResize);
+    return () => {
+      stop();
+      io.disconnect();
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("resize", onResize);
+    };
   }, [theme, targets, reduce]);
 
   return <canvas ref={ref} className="h-full w-full" aria-hidden />;

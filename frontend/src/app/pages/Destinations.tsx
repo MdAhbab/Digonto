@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Plus, Check } from "lucide-react";
 import { useI18n } from "../lib/i18n";
 import { useTheme } from "../lib/theme";
@@ -58,7 +58,14 @@ export function Destinations() {
   }
 
   const shortlistCount = countries.filter((c) => c.shortlisted).length;
-  const targets = countries.map((c) => ({ lat: c.lat, lng: c.lng, active: c.shortlisted }));
+  // Memoised because Globe keys its scene effect on this array. Built inline, a
+  // fresh identity on every render of this page tore the canvas down and rebuilt
+  // it each time — including on every `pending` change as a student clicks a
+  // shortlist button, which is precisely when the globe should stay steady.
+  const targets = useMemo(
+    () => countries.map((c) => ({ lat: c.lat, lng: c.lng, active: c.shortlisted })),
+    [countries],
+  );
   const meta = SEO_ROUTES["/destinations"];
 
   return (

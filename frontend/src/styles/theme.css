@@ -205,11 +205,23 @@
     font-weight: var(--font-weight-medium);
     letter-spacing: -0.01em;
   }
+  /* Bangla display type needs the same generous leading as Bangla body type,
+     not less. Headings were set at 1.4, below the 1.7 floor, and headings are
+     exactly where it shows: at display sizes a যুক্তাক্ষর stack plus an ঐ/ৈ/ৌ
+     mark above and a ্র/্য below occupies far more vertical space than the Latin
+     cap-height the 1.4 was chosen for, so the marks clipped against the line
+     above. 1.7 here, easing toward the tighter Latin ratios only as the type
+     gets larger and the absolute leading is already ample.
+
+     letter-spacing stays at 0: the -0.01em tracking applied to Latin headings
+     breaks Bangla conjunct joins. */
   .lang-bn h1, .lang-bn h2, .lang-bn h3, .lang-bn h4 {
     font-family: var(--font-serif-bn);
     letter-spacing: 0;
-    line-height: 1.4;
+    line-height: 1.7;
   }
+  .lang-bn h1 { line-height: 1.5; }
+  .lang-bn h2 { line-height: 1.55; }
 
   h1 { font-size: var(--text-2xl); line-height: 1.15; }
   h2 { font-size: var(--text-xl); line-height: 1.2; }
@@ -248,4 +260,32 @@
 
   .no-scrollbar::-webkit-scrollbar { display: none; }
   .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+  /* Skeleton bands for route and data loading. A slow tone shift, not a sweep or
+     a pulse: the placeholder should read as paper waiting to be printed. */
+  .skeleton-band {
+    animation: skeleton-breathe 2.4s ease-in-out infinite;
+  }
+  @keyframes skeleton-breathe {
+    0%, 100% { opacity: 0.55; }
+    50%      { opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .skeleton-band { animation: none; opacity: 0.75; }
+  }
+
+  /* One-shot stroke draw for the low-power SVG hero (StaticHorizon). Runs once
+     and holds; no loop, because the whole point of that variant is that the
+     device cannot afford one. */
+  .horizon-path {
+    stroke-dasharray: 320;
+    stroke-dashoffset: 320;
+    animation: horizon-draw 2.2s 0.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+  @keyframes horizon-draw {
+    to { stroke-dashoffset: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .horizon-path { animation: none; stroke-dashoffset: 0; }
+  }
 }

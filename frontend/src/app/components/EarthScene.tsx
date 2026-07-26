@@ -1,22 +1,67 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
+import { StaticHorizon } from "./StaticHorizon";
 
 gsap.registerPlugin(ScrollTrigger);
 
+/* Whether this device should be given a WebGL scene at all.
+
+   The design brief asks for the 3D hero to step down to a cheaper variant on
+   low-power devices, detected by deviceMemory and hardwareConcurrency, because
+   the audience is largely on mid-range Android. A phone with 2 GB of reported
+   memory or two cores will render this at a handful of frames per second while
+   heating up and draining battery, which is worse than a still image that looks
+   deliberate. Both properties are non-standard, so an absent value is treated as
+   capable rather than assumed weak: penalising unknown devices would drop the
+   scene on every Safari visit. */
+function prefersCheapScene(): boolean {
+  if (typeof navigator === "undefined") return true;
+  const nav = navigator as Navigator & { deviceMemory?: number };
+  if (typeof nav.deviceMemory === "number" && nav.deviceMemory > 0 && nav.deviceMemory <= 2) {
+    return true;
+  }
+  if (typeof nav.hardwareConcurrency === "number" && nav.hardwareConcurrency > 0
+      && nav.hardwareConcurrency <= 2) {
+    return true;
+  }
+  return false;
+}
+
 /* A real Three.js Earth built from a point-cloud globe + atmosphere rim.
-   No external textures (works offline). GSAP ScrollTrigger scrubs the camera
-   from deep space down toward Dhaka as the hero scrolls, then hands off to
-   the rest of the page. Fully teardown-safe and reduced-motion aware. */
+   No external textures. GSAP ScrollTrigger scrubs the camera from deep space
+   down toward Dhaka as the hero scrolls, then hands off to the rest of the page.
+
+   Steps down twice: to a single static frame under prefers-reduced-motion, and
+   to a pure-SVG horizon (no WebGL context at all) on a low-power device. */
 export function EarthScene({ theme }: { theme: "light" | "dark" }) {
   const mountRef = useRef<HTMLDivElement>(null);
 
+  // Read once per mount, not per render: neither value changes for the life of
+  // the page, and matchMedia in a render body would be a new object each time.
+  const cheap = useMemo(prefersCheapScene, []);
+  const [reduce, setReduce] = useState(
+    () => typeof window !== "undefined"
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+
+  // Honour a change of the preference while the page is open. Reading it once
+  // inside the scene effect meant a user turning reduced motion on kept the
+  // animation until they navigated away.
   useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onChange = () => setReduce(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
+  useEffect(() => {
+    if (cheap) return;
     const mount = mountRef.current;
     if (!mount) return;
 
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const cleanups: Array<() => void> = [];
     const isDark = theme === "dark";
 
     const accent = new THREE.Color(isDark ? "#4ba38c" : "#0f3d33");
@@ -159,7 +204,8 @@ export function EarthScene({ theme }: { theme: "light" | "dark" }) {
 
     let raf = 0;
     const clock = new THREE.Clock();
-    const render = () => {
+
+    const renderFrame = () => {
       const t = clock.getElapsedTime();
       if (!reduce) globe.rotation.y += 0.0006;
       // ease camera from 3.4 (space) to 1.55 (close on Dhaka)
@@ -171,27 +217,97 @@ export function EarthScene({ theme }: { theme: "light" | "dark" }) {
       ring.scale.setScalar(pulse);
       (ring.material as { opacity: number }).opacity = 0.6 * (1 - (pulse - 1) / 0.25 * 0.4);
       renderer.render(scene, camera);
-      raf = requestAnimationFrame(render);
     };
-    render();
+
+    // Under reduced motion the scene is a still image: draw once and never take
+    // another frame. Previously the loop still ran at 60 fps and only the
+    // rotation was suppressed, which spent a phone's battery to animate nothing.
+    if (reduce) {
+      renderFrame();
+    } else {
+      // Only animate while the canvas is actually on screen and the tab is
+      // visible. An off-screen WebGL canvas rendering 7,000 points at 60 fps is
+      // pure battery drain on the mid-range Android this is built for.
+      let onScreen = true;
+      const loop = () => {
+        renderFrame();
+        raf = requestAnimationFrame(loop);
+      };
+      const start = () => {
+        if (!raf && onScreen && !document.hidden) {
+          clock.getDelta(); // discard time spent paused so nothing jumps
+          raf = requestAnimationFrame(loop);
+        }
+      };
+      const stop = () => {
+        if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      };
+
+      const io = new IntersectionObserver(
+        ([entry]) => { onScreen = entry.isIntersecting; onScreen ? start() : stop(); },
+        { threshold: 0 },
+      );
+      io.observe(mount);
+      const onVisibility = () => (document.hidden ? stop() : start());
+      document.addEventListener("visibilitychange", onVisibility);
+      start();
+
+      cleanups.push(() => {
+        stop();
+        io.disconnect();
+        document.removeEventListener("visibilitychange", onVisibility);
+      });
+    }
 
     const onResize = () => {
       if (!mount) return;
       camera.aspect = mount.clientWidth / mount.clientHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(mount.clientWidth, mount.clientHeight);
+      if (reduce) renderFrame(); // static variant still has to track its box
     };
     window.addEventListener("resize", onResize);
 
     return () => {
+      cleanups.forEach((fn) => fn());
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", onResize);
       st?.kill();
+
+      // Dispose everything, not just the renderer and one geometry.
+      //
+      // This effect re-runs on every theme change, so an incomplete teardown
+      // leaked a full scene's worth of GPU objects on each light/dark toggle:
+      // eight geometries, seven materials, and a compiled ShaderMaterial
+      // program, none of which the garbage collector can reclaim because they
+      // live in the WebGL context, not the JS heap. Walking the scene graph is
+      // used rather than a hand-written list so anything added to the scene
+      // later is disposed without this block needing to be updated.
+      // Structurally typed rather than using THREE's own types: `three` ships no
+      // declarations here and src/three-shim.d.ts deliberately keeps it untyped
+      // rather than adding @types/three. Only these two members are touched.
+      type Disposable = { dispose?: () => void };
+      type SceneNode = { geometry?: Disposable; material?: Disposable | Disposable[] };
+
+      scene.traverse((obj: SceneNode) => {
+        obj.geometry?.dispose?.();
+        const material = obj.material;
+        if (Array.isArray(material)) material.forEach((m) => m.dispose?.());
+        else material?.dispose?.();
+      });
+      scene.clear();
+
       renderer.dispose();
-      ptGeo.dispose();
+      // A browser allows only a small number of live WebGL contexts (commonly 8
+      // to 16). renderer.dispose() releases Three's own resources but does not
+      // release the context, so repeated remounts silently exhaust the budget
+      // and the canvas stops drawing with no error. This forces the release.
+      renderer.forceContextLoss();
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
     };
-  }, [theme]);
+  }, [theme, reduce, cheap]);
+
+  if (cheap) return <StaticHorizon theme={theme} />;
 
   return <div ref={mountRef} className="h-full w-full" aria-hidden />;
 }
