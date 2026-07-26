@@ -1,0 +1,164 @@
+"""Porter (পোর্টার), the Portal Watch agent.
+
+No student should learn about a deadline change after it stops being
+recoverable. Porter consumes portal-change events, decides what a change is, and
+turns material changes into alerts that quote the changed sentence and cite the
+snapshot it came from.
+
+The confidence threshold is the whole design. A wrong alert telling five hundred
+students their deadline moved is far worse than an alert that arrives six hours
+late, so anything below the threshold goes to a human queue instead of to
+students. Cosmetic changes are discarded silently, because an alert about
+reworded boilerplate teaches students to ignore alerts.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from app.agents.runtime import REFUSAL_NOTE, AgentCall, clamp01, structured
+from app.llm.router import ModelRouter, TaskKind
+
+log = logging.getLogger(__name__)
+
+# Below this, a person decides. Tuned against reviewer capacity, not set once:
+# see docs/business_model.md section 5.
+REVIEW_THRESHOLD = 0.70
+
+MATERIAL_CATEGORIES = {"deadline", "fee", "document_requirement", "policy"}
+
+CLASSIFY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "category": {
+            "type": "string",
+            "enum": ["deadline", "fee", "document_requirement", "policy", "cosmetic"],
+        },
+        "confidence": {"type": "number"},
+        "reason": {"type": "string"},
+    },
+    "required": ["category", "confidence", "reason"],
+}
+
+ALERT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title_en": {"type": "string"},
+        "title_bn": {"type": "string"},
+        "body_en": {"type": "string"},
+        "body_bn": {"type": "string"},
+        "consequence_en": {"type": "string"},
+        "consequence_bn": {"type": "string"},
+    },
+    "required": [
+        "title_en", "title_bn", "body_en", "body_bn",
+        "consequence_en", "consequence_bn",
+    ],
+}
+
+CLASSIFY_SYSTEM = (
+    "You classify changes to official immigration and university pages. "
+    "Choose exactly one category. Use 'cosmetic' when the meaning is unchanged "
+    "and only wording, formatting, or navigation moved. Use 'policy' for a rule "
+    "change that is not a deadline, a fee, or a document requirement. "
+    "Confidence is your certainty from 0 to 1. Be conservative: if the change "
+    "is ambiguous, give a low confidence rather than guessing a category."
+)
+
+ALERT_SYSTEM = (
+    "You are Porter, writing an alert to a Bangladeshi student about a change "
+    "on an official page they depend on. Quote the changed sentence. State the "
+    "concrete consequence for this student, including a date where one is "
+    "given. Be brief and calm. Never state a date, amount, or requirement that "
+    "is not in the change you were given. Bangla must be natural and must not "
+    "leave English administrative wording untranslated. " + REFUSAL_NOTE
+)
+
+
+async def classify_change(
+    *,
+    old_text: str,
+    new_text: str,
+    portal_label: str,
+    router: ModelRouter,
+) -> dict[str, Any]:
+    """Decide what a diff is. Returns category, confidence, and needs_review."""
+    data = await structured(
+        router,
+        AgentCall(
+            kind=TaskKind.CLASSIFY_CHANGE,
+            system=CLASSIFY_SYSTEM,
+            # Thinking off: this is a short classification and the extra tokens
+            # only add latency to a job that runs on every changed passage.
+            thinking=False,
+            temperature=0.0,
+            max_tokens=256,
+            user=(
+                f"PORTAL: {portal_label}\n"
+                f"OLD TEXT: {old_text}\n"
+                f"NEW TEXT: {new_text}"
+            ),
+            schema=CLASSIFY_SCHEMA,
+        ),
+    )
+
+    category = data.get("category", "policy")
+    if category not in MATERIAL_CATEGORIES | {"cosmetic"}:
+        category = "policy"
+    confidence = clamp01(data.get("confidence"), 0.0)
+
+    return {
+        "category": category,
+        "confidence": confidence,
+        "reason": data.get("reason", ""),
+        # A low-confidence cosmetic call still goes to review: discarding a real
+        # change is the expensive mistake, not queueing a trivial one.
+        "needs_review": confidence < REVIEW_THRESHOLD,
+        "notify": category in MATERIAL_CATEGORIES and confidence >= REVIEW_THRESHOLD,
+    }
+
+
+async def compose_alert(
+    *,
+    category: str,
+    old_text: str,
+    new_text: str,
+    portal_label: str,
+    snapshot_public_id: str,
+    student_context: dict[str, Any] | None,
+    router: ModelRouter,
+) -> dict[str, Any]:
+    """Write the alert a student receives, quoting and citing the change."""
+    context = ""
+    if student_context:
+        context = "\n".join(
+            f"{k}: {v}" for k, v in student_context.items() if v is not None
+        )
+
+    data = await structured(
+        router,
+        AgentCall(
+            kind=TaskKind.AGENT_TOOL,
+            system=ALERT_SYSTEM,
+            user=(
+                f"PORTAL: {portal_label}\n"
+                f"CHANGE TYPE: {category}\n"
+                f"OLD TEXT: {old_text}\n"
+                f"NEW TEXT: {new_text}\n"
+                f"THIS STUDENT:\n{context or 'no additional context'}"
+            ),
+            schema=ALERT_SCHEMA,
+            max_tokens=1024,
+        ),
+    )
+
+    return {
+        "kind": "portal_change",
+        "severity": "critical" if category == "deadline" else "warning",
+        "title_en": data.get("title_en", ""),
+        "title_bn": data.get("title_bn", ""),
+        "body_en": f"{data.get('body_en', '')}\n\n{data.get('consequence_en', '')}".strip(),
+        "body_bn": f"{data.get('body_bn', '')}\n\n{data.get('consequence_bn', '')}".strip(),
+        "snapshot_public_id": snapshot_public_id,
+    }
