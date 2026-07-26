@@ -58,11 +58,18 @@ ALERT_SCHEMA = {
 }
 
 CLASSIFY_SYSTEM = (
-    "You classify changes to official immigration and university pages. "
-    "Choose exactly one category. Use 'cosmetic' when the meaning is unchanged "
-    "and only wording, formatting, or navigation moved. Use 'policy' for a rule "
-    "change that is not a deadline, a fee, or a document requirement. "
-    "Confidence is your certainty from 0 to 1. Be conservative: if the change "
+    "You classify changes to official immigration and university pages into "
+    "exactly one category.\n"
+    "Apply these rules IN ORDER and stop at the first one that matches:\n"
+    "1. deadline: any date by which something must be done changed, was added, "
+    "or was removed. A date change is ALWAYS 'deadline', never 'policy'.\n"
+    "2. fee: an amount of money changed, was added, or was removed.\n"
+    "3. document_requirement: the list of documents or evidence changed.\n"
+    "4. policy: a rule changed that is not a date, an amount, or a document. "
+    "Use this only when rules 1 to 3 do not match.\n"
+    "5. cosmetic: the meaning is unchanged and only wording, formatting, "
+    "punctuation, or navigation moved.\n"
+    "Confidence is your certainty from 0 to 1. Be conservative: when the change "
     "is ambiguous, give a low confidence rather than guessing a category."
 )
 
