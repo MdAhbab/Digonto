@@ -79,7 +79,8 @@ class ProgrammeOut(BaseModel):
     duration_months: int | None = None
     tuition_amount: int | None = None
     tuition_currency: str | None = None
-    intake_months: list[str] | None = None
+    # The catalogue stores month numbers ([9, 1]); seeded demo rows store names (["September"]).
+    intake_months: list[int | str] | None = None
     min_cgpa: float | None = None
     min_english: float | None = None
     deadline_at: str | None = None
