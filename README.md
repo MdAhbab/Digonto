@@ -20,7 +20,7 @@ A student in Rangpur or Barishal should be able to plan an international
 education without paying a consultancy firm a semester's worth of tuition for
 advice that is often wrong. That is the entire purpose of this project.
 
-**Live:** https://digonto.ahbab.dev · **Competition:**
+**Live demo:** https://digonto-navigator.vercel.app · **Competition:**
 [Build With Gemma @ Bangladesh](https://kaggle.com/competitions/build-with-gemma-bangladesh)
 
 ---
@@ -29,7 +29,7 @@ advice that is often wrong. That is the entire purpose of this project.
 
 Two accounts are seeded with realistic data, so nothing has to be created before
 the product does something. Sign in at
-[digonto.ahbab.dev/auth](https://digonto.ahbab.dev/auth). Email and password
+[digonto-navigator.vercel.app/auth](https://digonto-navigator.vercel.app/auth). Email and password
 only, no confirmation email, no one-time code.
 
 | Role | Email | Password |
@@ -41,6 +41,13 @@ The student account arrives with a profile, three shortlisted programmes, six
 vault documents, a plan already in progress, answered questions with citations,
 and one completed interview. The reviewer account opens on a queue with real
 pending work in it.
+
+> **About the Vercel demo.** It runs without Ollama, Redis, Qdrant or the background
+> workers, so it is a walkthrough of the product rather than the full system. Sign-in,
+> the seeded plan, documents, funding and destinations are there, but anything that
+> needs the model, such as Ask Digonto answers and document audits, will not generate
+> new results. Data lives in temporary storage and resets when the function restarts.
+> Run `python run.py` locally with Ollama for the complete system.
 
 **The fastest way to see what this is, in about ninety seconds:**
 
